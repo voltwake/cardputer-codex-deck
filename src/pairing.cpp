@@ -422,6 +422,16 @@ void PairingManager::handleLine(const String& line) {
   }
   if (type == "pong") {
     missedPongs_ = 0;
+    if (incomingDocument_["audio_received"].is<uint32_t>()) {
+      const uint32_t received = incomingDocument_["audio_received"].as<uint32_t>();
+      const bool outputReady = incomingDocument_["audio_output_ready"] | false;
+      portENTER_CRITICAL(&audioMux_);
+      audioStatusSeen_ = true;
+      audioOutputReady_ = outputReady;
+      audioReceived_ = received;
+      audioStatusMs_ = millis();
+      portEXIT_CRITICAL(&audioMux_);
+    }
     return;
   }
   if (type == "ping") {
@@ -680,6 +690,18 @@ bool PairingManager::audioEndpoint(IPAddress& ip, uint8_t token[32]) const {
   return true;
 }
 
+bool PairingManager::audioStatus(uint32_t& received, uint32_t& updatedMs,
+                                 bool& outputReady) const {
+  bool seen;
+  portENTER_CRITICAL(&audioMux_);
+  seen = audioStatusSeen_;
+  received = audioReceived_;
+  updatedMs = audioStatusMs_;
+  outputReady = audioOutputReady_;
+  portEXIT_CRITICAL(&audioMux_);
+  return seen;
+}
+
 int PairingManager::pairedIndexById(const String& id) const {
   for (size_t i = 0; i < pairedCount_; ++i) {
     if (paired_[i].id == id) return static_cast<int>(i);
@@ -741,6 +763,10 @@ void PairingManager::setAudioReady(bool ready) {
   }
   portENTER_CRITICAL(&audioMux_);
   audioReady_ = ready;
+  audioStatusSeen_ = false;
+  audioOutputReady_ = false;
+  audioReceived_ = 0;
+  audioStatusMs_ = 0;
   if (ready) {
     for (size_t i = 0; i < 4; ++i) audioIp_[i] = targetIp_[i];
     memcpy(audioToken_, decoded, sizeof(audioToken_));

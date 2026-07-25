@@ -242,8 +242,7 @@ class BridgeApp:
 
     def status_snapshot(self) -> dict[str, object]:
         accessibility = self.keyboard.check_accessibility(prompt=False)
-        audio_stream = getattr(self.audio, "_stream", None)
-        audio_running = self.audio_disabled or audio_stream is not None
+        audio_running = self.audio.is_running()
         codex_client = self.codex_monitor.client
         codex_process = codex_client.process if codex_client is not None else None
         codex_connected = codex_process is not None and codex_process.returncode is None
@@ -375,7 +374,7 @@ class BridgeApp:
             ticks += 1
             if ticks % 3 == 0:
                 await self._refresh_network()
-            if ticks % 5 == 0 and self.audio_error:
+            if ticks % 5 == 0 and (self.audio_error or not self.audio.is_running()):
                 self._start_audio_output()
             await self._publish_status()
 
@@ -392,7 +391,7 @@ class BridgeApp:
                 self.last_error = ""
             if previous_error:
                 LOG.info("audio output recovered: %s", getattr(self.audio, "device_name", ""))
-        except RuntimeError as exc:
+        except Exception as exc:
             self.audio_error = str(exc)
             self.last_error = self.audio_error
             if self.audio_error != previous_error:
@@ -638,7 +637,18 @@ class BridgeApp:
                 continue
             device.touch()
             if message_type == "ping":
-                await self._send(writer, {"t": "pong", "token": token})
+                # Piggyback audio liveness on the existing heartbeat. Older
+                # firmware ignores these fields; newer firmware can distinguish
+                # a healthy TCP keyboard link from a stalled UDP/audio path.
+                await self._send(
+                    writer,
+                    {
+                        "t": "pong",
+                        "token": token,
+                        "audio_received": device.audio_packets,
+                        "audio_output_ready": self.audio.is_running(),
+                    },
+                )
             elif message_type == "pong":
                 continue
             elif message_type == "key":

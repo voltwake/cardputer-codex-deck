@@ -95,6 +95,12 @@ class ServerEndToEndTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(self.app.audio.jitter.received, 1)
+        writer.write(encode_message({"t": "ping", "token": token}))
+        await writer.drain()
+        audio_health = await self.read(reader)
+        self.assertEqual(audio_health["t"], "pong")
+        self.assertEqual(audio_health["audio_received"], 1)
+        self.assertTrue(audio_health["audio_output_ready"])
         writer.close()
         await writer.wait_closed()
 

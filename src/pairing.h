@@ -32,6 +32,8 @@ class PairingManager {
                bool option, bool control);
   bool sendAgentAck(const String& sessionId);
   bool audioEndpoint(IPAddress& ip, uint8_t token[32]) const;
+  bool audioStatus(uint32_t& received, uint32_t& updatedMs,
+                   bool& outputReady) const;
 
   LinkState state() const { return state_; }
   bool connected() const { return state_ == LinkState::Connected; }
@@ -152,6 +154,10 @@ class PairingManager {
   bool audioReady_ = false;
   uint8_t audioIp_[4]{};
   uint8_t audioToken_[32]{};
+  bool audioStatusSeen_ = false;
+  bool audioOutputReady_ = false;
+  uint32_t audioReceived_ = 0;
+  uint32_t audioStatusMs_ = 0;
 };
 
 }  // namespace cardbridge

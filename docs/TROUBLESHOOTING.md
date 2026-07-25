@@ -30,6 +30,22 @@ Then check Audio MIDI Setup for both `CardBridge Microphone` and
 `CardBridge Microphone Feed`. Restarting `coreaudiod` may be required after a
 manual driver change. BlackHole 2ch is a supported fallback.
 
+## Microphone stops while keyboard forwarding still works
+
+Current firmware and Agent builds recover this path automatically: the device
+restarts I2S and its UDP socket when authenticated heartbeat counters stop
+advancing, while the Agent recreates an inactive Core Audio stream. Install the
+matching current firmware and App before diagnosing an older build.
+
+If audio still does not recover, open the App menu and check that the M5 packet
+count continues to increase while Remote mode is on. A fixed count points to
+the device/Wi-Fi path; an increasing count with an unhealthy audio indicator
+points to the local Core Audio feed or driver.
+
+BtnA mode changes intentionally stop capture and discard buffered samples. The
+firmware keeps the unused Cardputer speaker/DAC powered down so this transition
+does not produce a hiss or buzz.
+
 ## Cardputer is not discovered
 
 - Allow Local Network access for CardBridge.

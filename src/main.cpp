@@ -38,6 +38,12 @@ void printBootInfo() {
 
 void setup() {
   auto config = M5.config();
+  // Audio is owned by AudioTransmitter. Leaving M5Unified's speaker/mic
+  // drivers enabled lets them retain the same ES8311 and I2S pins, which can
+  // produce a buzz when BtnA stops capture and can prevent a clean restart
+  // after a power or WiFi transition.
+  config.internal_mic = false;
+  config.internal_spk = false;
   M5Cardputer.begin(config, true);
   Serial.begin(115200);
   delay(100);

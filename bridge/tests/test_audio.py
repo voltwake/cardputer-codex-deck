@@ -49,6 +49,18 @@ class JitterBufferTests(unittest.TestCase):
         self.assertEqual(jitter.resyncs, 1)
         self.assertEqual(jitter.read_samples(320), [2] * 320)
 
+    def test_starvation_stops_sequence_drift_before_resume(self) -> None:
+        jitter = JitterBuffer(target_ms=20, max_frames=50)
+        jitter.feed(200, frame(1))
+        self.assertEqual(jitter.read_samples(320), [1] * 320)
+        for _ in range(jitter.starvation_frames):
+            self.assertEqual(jitter.read_samples(320), [0] * 320)
+        self.assertEqual(jitter.resyncs, 1)
+
+        # The first resumed frame establishes a fresh stream immediately.
+        jitter.feed(201, frame(2))
+        self.assertEqual(jitter.read_samples(320), [2] * 320)
+
     def test_small_reorder_is_still_dropped_as_late(self) -> None:
         jitter = JitterBuffer(target_ms=20, max_frames=50)
         jitter.feed(10, frame(1))
@@ -88,6 +100,49 @@ class AudioOutputSelectionTests(unittest.TestCase):
             [{"name": BLACKHOLE_DEVICE, "max_output_channels": 2, "default_samplerate": 48000}]
         )
         self.assertEqual(output.device_name, BLACKHOLE_DEVICE)
+
+    def test_restarts_an_inactive_core_audio_stream(self) -> None:
+        numpy = types.ModuleType("numpy")
+        sounddevice = types.ModuleType("sounddevice")
+        streams = []
+
+        class FakeStream:
+            def __init__(self) -> None:
+                self.active = False
+                self.closed = False
+
+            def start(self) -> None:
+                self.active = True
+
+            def stop(self) -> None:
+                self.active = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        def output_stream(**_kwargs: object) -> FakeStream:
+            stream = FakeStream()
+            streams.append(stream)
+            return stream
+
+        sounddevice.query_devices = lambda: [  # type: ignore[attr-defined]
+            {
+                "name": CARDBRIDGE_FEED_DEVICE,
+                "max_output_channels": 2,
+                "default_samplerate": 48000,
+            }
+        ]
+        sounddevice.OutputStream = output_stream  # type: ignore[attr-defined]
+        output = BlackHoleAudioOutput()
+        with patch.dict(sys.modules, {"numpy": numpy, "sounddevice": sounddevice}):
+            output.start()
+            first = streams[0]
+            first.active = False
+            output.start()
+
+        self.assertEqual(len(streams), 2)
+        self.assertTrue(first.closed)
+        self.assertTrue(output.is_running())
 
 
 if __name__ == "__main__":

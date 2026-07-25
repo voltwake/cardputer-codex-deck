@@ -20,7 +20,6 @@ bool AudioTransmitter::begin(bool muted) {
   muted_ = muted;
   queue_ = xQueueCreate(kAudioRingFrames, sizeof(AudioFrame));
   if (!queue_) return false;
-  udp_.begin(0);
   const BaseType_t captureOk = xTaskCreatePinnedToCore(
       captureTaskEntry, "mic_capture", 4096, this, 3, &captureTask_, 0);
   const BaseType_t senderOk = xTaskCreatePinnedToCore(
@@ -30,12 +29,18 @@ bool AudioTransmitter::begin(bool muted) {
 
 void AudioTransmitter::setActive(bool active) {
   active_ = active;
-  if (!active && queue_) xQueueReset(queue_);
+  if (!active && queue_) {
+    xQueueReset(queue_);
+    captureRestartRequested_ = false;
+  }
 }
 
 void AudioTransmitter::setMuted(bool muted) {
   muted_ = muted;
-  if (muted && queue_) xQueueReset(queue_);
+  if (muted && queue_) {
+    xQueueReset(queue_);
+    captureRestartRequested_ = false;
+  }
 }
 
 bool AudioTransmitter::streamingAllowed() const {
@@ -64,7 +69,7 @@ bool AudioTransmitter::micStart() {
   // Working recipe from vc1235-ui/vibe-cardputer (same board, same bug, solved).
   // Three non-obvious requirements, all mandatory:
   //   1. gpio_reset_pin() first — clear M5Unified's residual I2S pin state.
-  //   2. MCLK routed to GPIO0 (physically unwired) — with I2S_GPIO_UNUSED the
+  //   2. MCLK routed to a real unwired pin (GPIO13) — with I2S_GPIO_UNUSED the
   //      IDF 5.x clock tree doesn't fully init and DIN floats high (0xFFFF).
   //   3. Start I2S (BCLK running) BEFORE configuring the ES8311, so its PLL
   //      can lock onto BCLK. 16-bit STEREO slots → BCLK = 512kHz, ES8311
@@ -135,8 +140,11 @@ bool AudioTransmitter::micStart() {
   write(0x0A, 0x0C);  // SDP out: 16-bit, ADC output enabled
   write(0x0D, 0x01);  // power up analog
   write(0x0E, 0x02);
-  write(0x12, 0x00);
-  write(0x13, 0x10);
+  // This product never plays through the Cardputer speaker. Keep the DAC and
+  // headphone driver down while the ADC is running; powering them here was
+  // the source of the audible hiss/buzz around BtnA mode changes.
+  write(0x12, 0x02);  // power down DAC
+  write(0x13, 0x00);  // disable headphone output driver
   write(0x1B, 0x0A);  // HPF
   write(0x1C, 0x6A);  // DC offset cancel
   // Keep the codec at its proven-clean gain. Cranking 0x17/0x16 raised the
@@ -155,6 +163,11 @@ bool AudioTransmitter::micStart() {
 }
 
 void AudioTransmitter::micStop() {
+  // Mute the ADC before clocks disappear so the shared codec cannot emit a
+  // shutdown transient through any residual analog path.
+  M5.In_I2C.writeRegister8(0x18, 0x17, 0x00, 100000);
+  M5.In_I2C.writeRegister8(0x18, 0x13, 0x00, 100000);
+  vTaskDelay(pdMS_TO_TICKS(5));
   if (rxChannel_) {
     i2s_channel_disable(rxChannel_);
     i2s_del_channel(rxChannel_);
@@ -178,6 +191,8 @@ void AudioTransmitter::micStop() {
 
 void AudioTransmitter::captureLoop() {
   uint32_t sequence = 0;
+  uint8_t consecutiveReadFailures = 0;
+  uint16_t consecutiveInvalidFrames = 0;
   for (;;) {
     if (!streamingAllowed()) {
       if (rxChannel_) {
@@ -186,6 +201,15 @@ void AudioTransmitter::captureLoop() {
         rawPeak_ = 0;
         xQueueReset(queue_);
       }
+      vTaskDelay(pdMS_TO_TICKS(100));
+      continue;
+    }
+
+    if (captureRestartRequested_) {
+      captureRestartRequested_ = false;
+      if (rxChannel_) micStop();
+      xQueueReset(queue_);
+      ++micRestart_;
       vTaskDelay(pdMS_TO_TICKS(100));
       continue;
     }
@@ -201,18 +225,16 @@ void AudioTransmitter::captureLoop() {
     }
 
     AudioFrame frame{};
-    frame.sequence = sequence++;
-    frame.timestampMs = millis();
     // Read interleaved 16-bit L/R stereo; keep the left slot (ES8311 ADC).
     static int16_t stereo[kAudioSamplesPerFrame * 2];
     size_t received = 0;
     bool readOk = true;
     while (received < sizeof(stereo)) {
       size_t bytesRead = 0;
-      if (i2s_channel_read(rxChannel_,
-                           reinterpret_cast<uint8_t*>(stereo) + received,
-                           sizeof(stereo) - received, &bytesRead,
-                           pdMS_TO_TICKS(200)) != ESP_OK) {
+      const esp_err_t result = i2s_channel_read(
+          rxChannel_, reinterpret_cast<uint8_t*>(stereo) + received,
+          sizeof(stereo) - received, &bytesRead, pdMS_TO_TICKS(200));
+      if (result != ESP_OK || bytesRead == 0) {
         readOk = false;
         break;
       }
@@ -220,8 +242,18 @@ void AudioTransmitter::captureLoop() {
     }
     if (!readOk) {
       ++recordFail_;
+      if (++consecutiveReadFailures >= kAudioReadFailureRestartCount) {
+        micStop();
+        xQueueReset(queue_);
+        ++micRestart_;
+        consecutiveReadFailures = 0;
+        vTaskDelay(pdMS_TO_TICKS(250));
+      }
       continue;
     }
+    consecutiveReadFailures = 0;
+    frame.sequence = sequence++;
+    frame.timestampMs = millis();
     for (size_t i = 0; i < kAudioSamplesPerFrame; ++i) {
       frame.samples[i] = stereo[i * 2];
     }
@@ -230,14 +262,32 @@ void AudioTransmitter::captureLoop() {
     if (!streamingAllowed()) continue;
 
     uint16_t peak = 0;
+    bool constantFrame = true;
     for (size_t i = 0; i < kAudioSamplesPerFrame; ++i) {
       int32_t sample = frame.samples[i];
+      if (i && frame.samples[i] != frame.samples[0]) constantFrame = false;
       const uint16_t absolute = static_cast<uint16_t>(
           sample < 0 ? min<int32_t>(-sample, 32767) : sample);
       if (absolute > peak) peak = absolute;
     }
     rawPeak_ = peak;
     level_ = static_cast<uint8_t>(min<uint32_t>(255, peak >> 7));
+
+    // A powered-down or unlocked ES8311 commonly returns a perfectly constant
+    // 0x0000/0xFFFF/DC frame while I2S still reports successful reads. Real
+    // microphone input always has at least converter noise. Restart instead
+    // of streaming a permanent buzz or silent DC forever.
+    if (constantFrame) {
+      if (++consecutiveInvalidFrames >= kAudioInvalidFrameRestartCount) {
+        micStop();
+        xQueueReset(queue_);
+        ++micRestart_;
+        consecutiveInvalidFrames = 0;
+        vTaskDelay(pdMS_TO_TICKS(250));
+      }
+      continue;
+    }
+    consecutiveInvalidFrames = 0;
 
     if (xQueueSend(queue_, &frame, 0) != pdPASS) {
       AudioFrame discarded;
@@ -249,18 +299,90 @@ void AudioTransmitter::captureLoop() {
   }
 }
 
+bool AudioTransmitter::udpStart() {
+  udp_.stop();
+  return udp_.begin(0) == 1;
+}
+
+void AudioTransmitter::udpStop() {
+  udp_.stop();
+}
+
+void AudioTransmitter::requestPipelineRestart() {
+  captureRestartRequested_ = true;
+  if (queue_) xQueueReset(queue_);
+}
+
 void AudioTransmitter::senderLoop() {
   AudioFrame frame;
+  bool udpReady = false;
+  uint8_t consecutiveSendFailures = 0;
+  bool ackInitialized = false;
+  uint32_t lastAckReceived = 0;
+  uint32_t lastAckProgressMs = 0;
+  uint32_t sentAtAckProgress = 0;
   for (;;) {
-    if (xQueueReceive(queue_, &frame, pdMS_TO_TICKS(100)) != pdPASS) continue;
     IPAddress ip;
     uint8_t token[32];
+    if (!active_ || muted_ || !pairing_.audioEndpoint(ip, token)) {
+      if (udpReady) {
+        udpStop();
+        udpReady = false;
+      }
+      ackInitialized = false;
+      vTaskDelay(pdMS_TO_TICKS(100));
+      continue;
+    }
+    if (!udpReady) {
+      if (!udpStart()) {
+        ++sendFail_;
+        vTaskDelay(pdMS_TO_TICKS(500));
+        continue;
+      }
+      udpReady = true;
+      consecutiveSendFailures = 0;
+    }
+    if (xQueueReceive(queue_, &frame, pdMS_TO_TICKS(100)) != pdPASS) continue;
     if (!active_ || muted_ || !pairing_.audioEndpoint(ip, token)) continue;
     if (sendFrame(frame, ip, token)) {
       ++sent_;
+      consecutiveSendFailures = 0;
     } else {
       ++droppedFrames_;
       ++sendFail_;
+      if (++consecutiveSendFailures >= kAudioSendFailureRestartCount) {
+        udpStop();
+        udpReady = false;
+        ++udpRestart_;
+        requestPipelineRestart();
+        consecutiveSendFailures = 0;
+      }
+    }
+
+    uint32_t ackReceived = 0;
+    uint32_t ackUpdatedMs = 0;
+    bool outputReady = false;
+    const uint32_t now = millis();
+    if (pairing_.audioStatus(ackReceived, ackUpdatedMs, outputReady) &&
+        now - ackUpdatedMs <= kAudioAckFreshMs) {
+      if (!ackInitialized || ackReceived != lastAckReceived) {
+        ackInitialized = true;
+        lastAckReceived = ackReceived;
+        lastAckProgressMs = now;
+        sentAtAckProgress = sent_;
+      } else if (outputReady && now - lastAckProgressMs >= kAudioAckStallMs &&
+                 sent_ - sentAtAckProgress >= kAudioAckMinSentFrames) {
+        // TCP is healthy enough to deliver status, but the Mac has stopped
+        // receiving UDP. Recreate both the UDP socket and the capture clock so
+        // a power/WiFi transition cannot leave a false-online audio path.
+        udpStop();
+        udpReady = false;
+        ++udpRestart_;
+        ++watchdogRestart_;
+        requestPipelineRestart();
+        lastAckProgressMs = now;
+        sentAtAckProgress = sent_;
+      }
     }
   }
 }

@@ -18,6 +18,10 @@ protocol v1 where the implementation documents that behavior.
 - Pairing uses a six-digit short code and then a random long-lived token.
 - After pairing, every authenticated message carries the token.
 - Key events preserve distinct `down` and `up` actions.
+- Authenticated `pong` responses may include cumulative UDP receive progress
+  and Core Audio output readiness. Firmware that understands these optional
+  fields uses them to recover a stalled microphone path; older firmware safely
+  ignores them.
 - Unknown authenticated message types are ignored for forward compatibility.
 
 ## Device UDP audio: port 7789
@@ -25,7 +29,8 @@ protocol v1 where the implementation documents that behavior.
 Each packet contains a network-order sequence number and timestamp, an 8-byte
 HMAC, and exactly 640 bytes of little-endian PCM16 mono audio (16 kHz, 20 ms).
 The Agent starts with a jitter depth of about 100 ms, fills missing packets with
-silence, and never retransmits audio.
+silence, resets stale buffered audio after a capture pause, and never
+retransmits audio.
 
 ## Local Agent API
 
