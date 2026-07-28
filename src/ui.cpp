@@ -1,5 +1,7 @@
 #include "ui.h"
 
+#include <USB.h>
+
 #include "ui_background_asset.h"
 #include "ui_font_data.h"
 
@@ -55,6 +57,21 @@ constexpr int kCodexFiveHourY = 116;
 constexpr int kCodexQuotaRowHeight = 10;
 constexpr uint8_t kBrightnessLevels[] = {64, 128, 192, 255};
 constexpr uint16_t kScreenTimeouts[] = {30, 60, 120, 300, 0};
+constexpr uint32_t kInteractiveRenderMs = 100;
+constexpr uint32_t kAnimatedRenderMs = 200;
+constexpr uint32_t kDimmedAnimatedRenderMs = 500;
+constexpr uint32_t kStaticRenderMs = 1000;
+constexpr uint32_t kInteractiveWindowMs = 5000;
+constexpr uint32_t kIdleDimAfterMs = 15000;
+constexpr uint8_t kIdleDimMaxBrightness = 40;
+constexpr uint8_t kIdleDimMinBrightness = 12;
+constexpr uint32_t kBatterySampleMs = 2000;
+constexpr uint32_t kScreenOffBatterySampleMs = 10000;
+constexpr uint32_t kBatteryTrendMinMs = 6000;
+constexpr uint32_t kBatteryTrendWindowMs = 20000;
+constexpr int16_t kChargingRiseMv = 25;
+constexpr int16_t kDischargingFallMv = 12;
+constexpr uint32_t kInferredChargingHoldMs = 60000;
 
 static_assert(kCodexLeftX == kCodexMargin);
 static_assert(kCodexRightX + kCodexColumnWidth + kCodexMargin == kWidth);
@@ -80,6 +97,17 @@ size_t brightnessLevelIndex(uint8_t value) {
     if (kBrightnessLevels[i] == value) return i;
   }
   return 1;
+}
+
+int batteryPercentFromVoltage(int millivolts) {
+  // Match M5Unified's ADC-backed Cardputer curve, but apply it to our
+  // smoothed voltage so the number does not jump on every LCD refresh.
+  const int level = (millivolts - 3300) * 100 / 800;
+  return max(0, min(100, level));
+}
+
+bool deadlinePending(uint32_t deadline, uint32_t now) {
+  return deadline != 0 && static_cast<int32_t>(deadline - now) > 0;
 }
 
 size_t utf8CharacterLength(const String& value, size_t index) {
@@ -160,13 +188,18 @@ void DeviceUi::begin() {
   // Boot always lands in Local mode, so the microphone stays physically off
   // until the user explicitly enables keyboard forwarding.
   audio_.setActive(mode_ == UiMode::Remote);
+  updateBatteryState(true);
   render();
+  lastRenderMs_ = millis();
+  renderRequested_ = false;
 }
 
 void DeviceUi::setMode(UiMode mode) {
   if (mode_ == mode) return;
   mode_ = mode;
   audio_.setActive(mode_ == UiMode::Remote);
+  resetBatteryTrend();
+  renderRequested_ = true;
   Serial.printf("[ui] mode=%s mic_active=%d muted=%d\n", modeName(),
                 audio_.active(), audio_.muted());
   suppressUntilRelease_ = M5Cardputer.Keyboard.isPressed();
@@ -190,8 +223,7 @@ void DeviceUi::tick() {
     Serial.println("[ui] BtnA click");
     noteActivity();
     if (screenOff_) {
-      screenOff_ = false;
-      M5Cardputer.Display.setBrightness(settings_.brightness);
+      wakeScreen();
     } else {
       toggleMode();
     }
@@ -204,14 +236,25 @@ void DeviceUi::tick() {
   if (M5Cardputer.Keyboard.isPressed()) {
     noteActivity();
     if (screenOff_) {
-      screenOff_ = false;
-      M5Cardputer.Display.setBrightness(settings_.brightness);
+      wakeScreen();
       // In Local mode the waking keypress must not also act on the UI.
       // In Remote mode keys keep flowing to the Mac uninterrupted.
       if (mode_ == UiMode::Local) suppressUntilRelease_ = true;
     }
   }
+  updateBatteryState();
   updateScreenPower();
+
+  const uint32_t agentSnapshotSeq = pairing_.agentSeq();
+  const LinkState linkState = pairing_.state();
+  const bool wifiConnected = wifi_.connected();
+  if (agentSnapshotSeq != lastAgentSnapshotSeq_ ||
+      linkState != lastLinkState_ || wifiConnected != lastWifiConnected_) {
+    lastAgentSnapshotSeq_ = agentSnapshotSeq;
+    lastLinkState_ = linkState;
+    lastWifiConnected_ = wifiConnected;
+    renderRequested_ = true;
+  }
 
   // First-boot funnel: no WiFi credentials -> jump into setup.
   if (wifi_.needsSetup() && mode_ == UiMode::Local && page_ == Page::Main) {
@@ -244,6 +287,7 @@ void DeviceUi::tick() {
     lastAgentFocusId_ = pairing_.agentFocusId();
     lastAgentFocusSeq_ = pairing_.agentFocusSeq();
     selectedAgentId_ = lastAgentFocusId_;
+    renderRequested_ = true;
   }
   if (showingCodex && !selectedAgentId_.isEmpty()) {
     bool found = false;
@@ -271,12 +315,18 @@ void DeviceUi::tick() {
       M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
     noteActivity();
     handleInput();
+    renderRequested_ = true;
   }
 
-  // Steady 10 fps into the off-screen canvas: no flicker, always fresh.
-  if (!screenOff_ && millis() - lastRenderMs_ >= 100) {
+  // Interactive input stays at 10 fps. Once untouched, animated Codex states
+  // use 5 fps (2 fps while dimmed) and static screens use 1 fps. This avoids
+  // pushing the complete 240x135 sprite over SPI ten times a second forever.
+  const uint32_t now = millis();
+  if (!screenOff_ &&
+      (renderRequested_ || now - lastRenderMs_ >= renderIntervalMs())) {
     render();
-    lastRenderMs_ = millis();
+    lastRenderMs_ = now;
+    renderRequested_ = false;
   }
 }
 
@@ -514,6 +564,8 @@ void DeviceUi::handleBrightness() {
   const size_t next = (current + count + direction) % count;
   settings_.brightness = kBrightnessLevels[next];
   M5Cardputer.Display.setBrightness(settings_.brightness);
+  screenDimmed_ = false;
+  resetBatteryTrend();
   store_.saveSettings(settings_);
 }
 
@@ -548,18 +600,141 @@ void DeviceUi::setPage(Page page) {
   page_ = page;
   listSelection_ = 0;
   suppressUntilRelease_ = M5Cardputer.Keyboard.isPressed();
+  renderRequested_ = true;
 }
 
 void DeviceUi::noteActivity() {
   lastActivityMs_ = millis();
+  if (screenDimmed_ && !screenOff_) {
+    M5Cardputer.Display.setBrightness(settings_.brightness);
+    screenDimmed_ = false;
+    resetBatteryTrend();
+    renderRequested_ = true;
+  }
+}
+
+void DeviceUi::wakeScreen() {
+  M5Cardputer.Display.wakeup();
+  M5Cardputer.Display.setBrightness(settings_.brightness);
+  screenOff_ = false;
+  screenDimmed_ = false;
+  lastBatterySampleMs_ = 0;
+  resetBatteryTrend();
+  renderRequested_ = true;
 }
 
 void DeviceUi::updateScreenPower() {
-  if (screenOff_ || settings_.screenTimeoutSec == 0) return;
-  if (millis() - lastActivityMs_ >= settings_.screenTimeoutSec * 1000UL) {
-    M5Cardputer.Display.setBrightness(0);
+  if (screenOff_) return;
+  const uint32_t inactiveMs = millis() - lastActivityMs_;
+  if (settings_.screenTimeoutSec != 0 &&
+      inactiveMs >= settings_.screenTimeoutSec * 1000UL) {
+    // sleep() turns off both the backlight and the LCD controller instead of
+    // leaving the panel scanning invisibly at brightness zero.
+    M5Cardputer.Display.sleep();
     screenOff_ = true;
+    screenDimmed_ = false;
+    resetBatteryTrend();
+    return;
   }
+  if (!screenDimmed_ && inactiveMs >= kIdleDimAfterMs) {
+    const int dimmed = max<int>(kIdleDimMinBrightness,
+                                min<int>(kIdleDimMaxBrightness,
+                                         settings_.brightness / 3));
+    M5Cardputer.Display.setBrightness(static_cast<uint8_t>(dimmed));
+    screenDimmed_ = true;
+    resetBatteryTrend();
+    renderRequested_ = true;
+  }
+}
+
+void DeviceUi::resetBatteryTrend() {
+  batteryTrendBaselineMv_ = batteryVoltageMv_;
+  batteryTrendStartedMs_ = millis();
+}
+
+void DeviceUi::updateBatteryState(bool force) {
+  const uint32_t now = millis();
+  const uint32_t sampleInterval = screenOff_ ? kScreenOffBatterySampleMs
+                                             : kBatterySampleMs;
+  if (!force && lastBatterySampleMs_ != 0 &&
+      now - lastBatterySampleMs_ < sampleInterval) {
+    return;
+  }
+  lastBatterySampleMs_ = now;
+
+  const int16_t measuredMv = M5Cardputer.Power.getBatteryVoltage();
+  if (measuredMv > 0) {
+    batteryVoltageMv_ = batteryVoltageMv_ == 0
+                            ? measuredMv
+                            : static_cast<int16_t>(
+                                  (batteryVoltageMv_ * 3 + measuredMv + 2) / 4);
+  }
+  const int oldLevel = batteryLevel_;
+  if (batteryVoltageMv_ > 0) {
+    batteryLevel_ = static_cast<int8_t>(
+        batteryPercentFromVoltage(batteryVoltageMv_));
+  } else {
+    const int reportedLevel = M5Cardputer.Power.getBatteryLevel();
+    batteryLevel_ = reportedLevel < 0
+                        ? -1
+                        : static_cast<int8_t>(min(100, reportedLevel));
+  }
+
+  const bool wasUsbPowered = usbPowerPresent_;
+  usbPowerPresent_ = static_cast<bool>(USB);
+  const auto reportedCharge = M5Cardputer.Power.isCharging();
+  const bool directlyCharging =
+      reportedCharge == m5::Power_Class::is_charging;
+  const bool directlyDischarging =
+      reportedCharge == m5::Power_Class::is_discharging;
+
+  if (wasUsbPowered && !usbPowerPresent_) inferredChargingUntilMs_ = 0;
+  if (directlyDischarging) inferredChargingUntilMs_ = 0;
+
+  // Cardputer ADV leaves TP4057 CHRG/STDBY disconnected from the MCU. USB
+  // enumeration therefore gives immediate evidence for a computer connection;
+  // a power-only charger is inferred only from a sustained filtered rise.
+  if (!usbPowerPresent_ && !directlyCharging && !directlyDischarging &&
+      batteryVoltageMv_ > 0) {
+    if (batteryTrendBaselineMv_ == 0) {
+      batteryTrendBaselineMv_ = batteryVoltageMv_;
+      batteryTrendStartedMs_ = now;
+    }
+    const uint32_t trendAge = now - batteryTrendStartedMs_;
+    const int deltaMv = batteryVoltageMv_ - batteryTrendBaselineMv_;
+    if (trendAge >= kBatteryTrendMinMs && deltaMv >= kChargingRiseMv) {
+      inferredChargingUntilMs_ = now + kInferredChargingHoldMs;
+      batteryTrendBaselineMv_ = batteryVoltageMv_;
+      batteryTrendStartedMs_ = now;
+    } else if (trendAge >= kBatteryTrendWindowMs) {
+      if (deltaMv <= -kDischargingFallMv) inferredChargingUntilMs_ = 0;
+      batteryTrendBaselineMv_ = batteryVoltageMv_;
+      batteryTrendStartedMs_ = now;
+    }
+  } else {
+    batteryTrendBaselineMv_ = batteryVoltageMv_;
+    batteryTrendStartedMs_ = now;
+  }
+
+  const bool oldCharging = batteryCharging_;
+  batteryCharging_ = directlyCharging || usbPowerPresent_ ||
+                     deadlinePending(inferredChargingUntilMs_, now);
+  if (batteryLevel_ != oldLevel || batteryCharging_ != oldCharging ||
+      usbPowerPresent_ != wasUsbPowered) {
+    renderRequested_ = true;
+  }
+}
+
+uint32_t DeviceUi::renderIntervalMs() const {
+  if (millis() - lastActivityMs_ < kInteractiveWindowMs) {
+    return kInteractiveRenderMs;
+  }
+  const PetVisualState visual = codexVisualState();
+  const bool animated = visual == PetVisualState::Thinking ||
+                        visual == PetVisualState::Running ||
+                        visual == PetVisualState::NeedsInput;
+  if (!animated) return kStaticRenderMs;
+  return screenDimmed_ ? kDimmedAnimatedRenderMs : kAnimatedRenderMs;
 }
 
 // -------------------------------------------------------------- drawing --
@@ -604,14 +779,48 @@ void DeviceUi::drawWifiStrengthIcon(int x, int y, int rssi,
   }
 }
 
-void DeviceUi::drawBattery(int x, int y) {
-  const int level = M5Cardputer.Power.getBatteryLevel();
-  canvas_.drawRect(x, y, 20, 10, kTextDim);
-  canvas_.fillRect(x + 20, y + 3, 2, 4, kTextDim);
-  if (level > 0) {
-    const uint16_t color = level > 30 ? kGood : kBad;
-    canvas_.fillRect(x + 2, y + 2, max(1, (20 - 4) * level / 100), 6, color);
+void DeviceUi::drawBattery(int x, int y, bool compact) {
+  const int bodyWidth = compact ? 13 : 17;
+  const int bodyHeight = compact ? 8 : 10;
+  const int terminalHeight = compact ? 4 : 4;
+  const uint16_t outline = batteryCharging_ ? kAccentWarm : kTextDim;
+  uint16_t fill = batteryLevel_ > 30 ? kGood : kBad;
+  if (batteryCharging_) fill = kAccentWarm;
+
+  canvas_.drawRect(x, y, bodyWidth, bodyHeight, outline);
+  canvas_.fillRect(x + bodyWidth, y + (bodyHeight - terminalHeight) / 2,
+                   2, terminalHeight, outline);
+  if (batteryLevel_ > 0) {
+    const int innerWidth = bodyWidth - 4;
+    canvas_.fillRect(x + 2, y + 2,
+                     max(1, innerWidth * batteryLevel_ / 100),
+                     bodyHeight - 4, fill);
   }
+  if (batteryCharging_) {
+    // A small black bolt remains legible over the orange charge fill even at
+    // the compact 13x8 detail-page size.
+    const int centerX = x + bodyWidth / 2;
+    const int middleY = y + bodyHeight / 2;
+    canvas_.drawLine(centerX + 1, y + 1, centerX - 2, middleY, TFT_BLACK);
+    canvas_.drawLine(centerX - 2, middleY, centerX + 1, middleY, TFT_BLACK);
+    canvas_.drawLine(centerX + 1, middleY, centerX - 1,
+                     y + bodyHeight - 2, TFT_BLACK);
+  }
+
+  const String label = batteryLevel_ < 0
+                           ? String("--")
+                           : String(static_cast<int>(batteryLevel_)) + "%";
+  const uint16_t labelColor = batteryCharging_
+                                  ? kAccentWarm
+                                  : (batteryLevel_ >= 0 && batteryLevel_ <= 15
+                                         ? kBad
+                                         : TFT_WHITE);
+  canvas_.setTextFont(1);
+  canvas_.setTextSize(1);
+  canvas_.setTextColor(labelColor);
+  canvas_.setTextDatum(middle_left);
+  canvas_.drawString(label, x + bodyWidth + 5, y + bodyHeight / 2);
+  canvas_.setTextDatum(top_left);
 }
 
 void DeviceUi::drawStatusBar() {
@@ -619,7 +828,7 @@ void DeviceUi::drawStatusBar() {
   drawKeyboardModeIcon(4, 4);
   drawWifiBars(28, 4, wifi_.rssi(), wifi_.connected());
   drawScrollingTitle(statusBarTitle());
-  drawBattery(214, 5);
+  drawBattery(184, 5);
 }
 
 String DeviceUi::statusBarTitle() const {
@@ -645,7 +854,7 @@ String DeviceUi::statusBarTitle() const {
 
 void DeviceUi::drawScrollingTitle(const String& title) {
   constexpr int x = 48;
-  constexpr int width = 144;
+  constexpr int width = 128;
   if (title != marqueeTitle_) {
     marqueeTitle_ = title;
     marqueeStartedMs_ = millis();
@@ -1551,6 +1760,7 @@ void DeviceUi::drawCodex() {
   drawCodexPlatformEffect(visual, now);
   drawKeyboardModeIcon(kCodexKeyboardX, kCodexKeyboardY);
   drawCodexSessionBadge(agentSelection_, pairing_.agentCount());
+  drawBattery(75, 7, true);
 
   canvas_.fillRoundRect(kCodexContentX - 2, kCodexTitleY - 2,
                         kCodexContentWidth + 4, kCodexTitleHeight + 4, 5,

@@ -132,14 +132,36 @@ def draw_wifi(draw: ImageDraw.ImageDraw, x: int, y: int, bars: int,
              fill=active if index < bars else inactive)
 
 
+def draw_battery(draw: ImageDraw.ImageDraw, x: int, y: int, level: int,
+                 *, charging: bool = False, compact: bool = False) -> None:
+    body_width = 13 if compact else 17
+    body_height = 8 if compact else 10
+    outline = ACCENT_WARM if charging else TEXT_DIM
+    fill = ACCENT_WARM if charging else GOOD if level > 30 else BAD
+    rect(draw, x, y, body_width, body_height, outline=outline)
+    rect(draw, x + body_width, y + (body_height - 4) // 2, 2, 4,
+         fill=outline)
+    if level > 0:
+        inner = body_width - 4
+        rect(draw, x + 2, y + 2, max(1, inner * level // 100),
+             body_height - 4, fill=fill)
+    if charging:
+        center_x = x + body_width // 2
+        middle_y = y + body_height // 2
+        draw.line((center_x + 1, y + 1, center_x - 2, middle_y,
+                   center_x + 1, middle_y, center_x - 1,
+                   y + body_height - 2), fill=BLACK)
+    text_color = ACCENT_WARM if charging else BAD if level <= 15 else WHITE
+    draw.text((x + body_width + 5, y + body_height // 2), f"{level}%",
+              font=FONT_MICRO, fill=text_color, anchor="lm")
+
+
 def draw_status_bar(draw: ImageDraw.ImageDraw) -> None:
     rect(draw, 0, 0, WIDTH, 20, fill=BLACK)
     draw_keyboard(draw, 4, 4, True)
     draw_wifi(draw, 28, 4, 4, active=GOOD, inactive=PANEL)
-    centered_text(draw, (120, 10), "CODEX DECK", face=FONT_SMALL)
-    rect(draw, 214, 5, 20, 10, outline=TEXT_DIM)
-    rect(draw, 234, 8, 2, 4, fill=TEXT_DIM)
-    rect(draw, 216, 7, 12, 6, fill=GOOD)
+    centered_text(draw, (112, 10), "CODEX DECK", face=FONT_SMALL)
+    draw_battery(draw, 184, 5, 76, charging=True)
 
 
 def draw_angular_panel(draw: ImageDraw.ImageDraw, x: int, y: int, width: int,
@@ -306,6 +328,7 @@ def draw_detail() -> Image.Image:
     draw_platform(draw, "running")
     draw_keyboard(draw, 6, 6, True)
     centered_text(draw, (60, 12), "2/4", face=FONT_MICRO)
+    draw_battery(draw, 75, 7, 76, charging=True, compact=True)
 
     draw_angular_panel(draw, 122, 4, 114, 127)
     rect(draw, 124, 6, 110, 22, fill=BACKGROUND, radius=5)

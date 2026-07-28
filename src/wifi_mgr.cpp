@@ -9,6 +9,12 @@ void WifiManager::begin() {
   scanResultQueue_ = xQueueCreate(1, sizeof(int16_t));
   if (!scanResultQueue_) Serial.println("[wifi] failed to create scan result queue");
   WiFi.mode(WIFI_STA);
+  // MIN_MODEM keeps the association alive and wakes for each DTIM beacon.
+  // Continuous microphone traffic naturally keeps the radio awake in Remote
+  // mode, while Local/idle use can spend most beacon intervals asleep.
+  if (!WiFi.setSleep(WIFI_PS_MIN_MODEM)) {
+    Serial.println("[wifi] modem sleep unavailable");
+  }
   WiFi.setAutoReconnect(true);
   WiFi.persistent(false);  // Credentials live in our own multi-network NVS list.
   if (savedCount_ > 0) {

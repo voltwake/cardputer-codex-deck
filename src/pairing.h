@@ -60,6 +60,7 @@ class PairingManager {
   const AgentSession& agent(size_t index) const { return agents_[index]; }
   const String& agentFocusId() const { return agentFocusId_; }
   uint32_t agentFocusSeq() const { return agentFocusSeq_; }
+  uint32_t agentSeq() const { return agentSeq_; }
   const AgentQuota& agentQuota() const { return agentQuota_; }
 
  private:
