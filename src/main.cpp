@@ -44,6 +44,11 @@ void setup() {
   // after a power or WiFi transition.
   config.internal_mic = false;
   config.internal_spk = false;
+  // Codex Deck does not consume motion or RTC data. Leaving the BMI270 in the
+  // M5Unified bring-up path needlessly wakes and configures another device on
+  // every boot; keep unused peripherals in their reset/suspend state.
+  config.internal_imu = false;
+  config.internal_rtc = false;
   M5Cardputer.begin(config, true);
   Serial.begin(115200);
   delay(100);
@@ -64,5 +69,8 @@ void loop() {
   pairing.tick();
   ui.tick();
   keys.tick(ui.consumesKeyboard());
-  delay(5);
+  // The ADV keyboard is interrupt-backed. A 100 Hz service loop keeps input
+  // latency imperceptible while halving idle loop wakeups versus the old 5 ms
+  // spin; audio capture and transmission run on their own FreeRTOS tasks.
+  delay(10);
 }

@@ -77,3 +77,18 @@ the top-left of the detail scene. A filled cyan keyboard means forwarding mode
 is enabled; its audio path is active unless the microphone is muted. An
 outlined grey keyboard with a red slash means local navigation is enabled and
 forwarding is off. BtnA changes this mode without changing the current page.
+
+## Battery and power behaviour
+
+The battery icon includes a numeric percentage on both the status bar and the
+Codex detail scene. While external USB power or a sustained charging trend is
+detected, the icon and percentage turn orange and a lightning bolt appears in
+the battery body. Cardputer ADV does not route the charger's dedicated status
+pins to the MCU, so a computer USB connection is detected immediately while a
+power-only charger may take several filtered samples to appear.
+
+After 15 seconds without input the backlight dims automatically. The selected
+screen-off timeout then places both the backlight and LCD controller into
+sleep. Input wakes the screen at the configured brightness. Untouched static
+screens also reduce their full-frame refresh rate, while active Codex states
+retain smoother animation.

@@ -79,7 +79,11 @@ class DeviceUi {
   void setPage(Page page);
   void setMode(UiMode mode);
   void noteActivity();
+  void wakeScreen();
   void updateScreenPower();
+  void updateBatteryState(bool force = false);
+  void resetBatteryTrend();
+  uint32_t renderIntervalMs() const;
 
   // drawing (all onto canvas_)
   void render();
@@ -120,7 +124,7 @@ class DeviceUi {
   void drawWifiBars(int x, int y, int rssi, bool connected);
   void drawWifiStrengthIcon(int x, int y, int rssi, uint16_t active,
                             uint16_t inactive);
-  void drawBattery(int x, int y);
+  void drawBattery(int x, int y, bool compact = false);
   String clipped(const String& value, size_t length) const;
   const AgentSession* selectedAgent() const;
   PetVisualState codexVisualState() const;
@@ -151,6 +155,9 @@ class DeviceUi {
   String selectedAgentId_;
   String lastAgentFocusId_;
   uint32_t lastAgentFocusSeq_ = 0;
+  uint32_t lastAgentSnapshotSeq_ = 0;
+  LinkState lastLinkState_ = LinkState::Offline;
+  bool lastWifiConnected_ = false;
   PetVisualState codexEffectState_ = PetVisualState::Idle;
   uint32_t codexEffectStateStartedMs_ = 0;
   String marqueeTitle_;
@@ -161,11 +168,21 @@ class DeviceUi {
   String pendingSsid_;
   String textEntry_;
   bool screenOff_ = false;
+  bool screenDimmed_ = false;
   bool consumesKeyboard_ = false;
   bool suppressUntilRelease_ = false;
+  bool renderRequested_ = true;
+  bool batteryCharging_ = false;
+  bool usbPowerPresent_ = false;
+  int8_t batteryLevel_ = -1;
+  int16_t batteryVoltageMv_ = 0;
+  int16_t batteryTrendBaselineMv_ = 0;
   uint32_t lastActivityMs_ = 0;
   uint32_t lastRenderMs_ = 0;
   uint32_t lastComputerScanMs_ = 0;
+  uint32_t lastBatterySampleMs_ = 0;
+  uint32_t batteryTrendStartedMs_ = 0;
+  uint32_t inferredChargingUntilMs_ = 0;
 };
 
 }  // namespace cardbridge
