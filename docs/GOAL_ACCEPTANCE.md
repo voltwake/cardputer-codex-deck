@@ -1,6 +1,6 @@
 # Current repository standardization Goal acceptance record
 
-> **Status: code implementation complete; remote rename pending**
+> **Status: complete**
 
 The active acceptance criteria are defined in [`GOAL.md`](GOAL.md). The code
 and directory migration was validated on 2026-08-02 from multi-device baseline
@@ -61,12 +61,32 @@ environment's Python module path, and the complete package build then passed.
 
 ## Remote repository rename
 
-The source, documentation, installer defaults, appcast metadata, and generated
-update feed now use the canonical `voltwake/codex-deck` slug. The GitHub
-repository and local `origin` are still `voltwake/cardputer-codex-deck` at this
-checkpoint. After this migration is committed and pushed to the default branch,
-the existing repository will be renamed in place, the remote updated, and this
-section completed with clone/fetch/release URL evidence.
+- Migration commit `07e27e2` was pushed to the old repository's `main` before
+  the rename. GitHub CI run `30762134513` then passed every project-contract,
+  generated-version, syntax, secret, Python, Swift, firmware, packaging, and
+  artifact-validation step.
+- The same public GitHub repository (`R_kgDOTZPG5A`) was renamed in place from
+  `voltwake/cardputer-codex-deck` to `voltwake/codex-deck`; it was not copied or
+  recreated. Its default branch remains `main` and the product-neutral
+  description was updated.
+- Local `origin` now explicitly uses
+  `https://github.com/voltwake/codex-deck.git` for fetch and push. A post-rename
+  fetch succeeded and `main` matched `origin/main` at `07e27e2`.
+- `git ls-remote` through both new and old clone URLs returned the same `main`
+  commit. The old web URL redirected to the canonical new URL, while all current
+  product metadata uses the new URL directly.
+- The raw `release/appcast.xml` is reachable through the new slug and links to
+  `https://github.com/voltwake/codex-deck`. The App's generated `SUFeedURL`,
+  installer default, project metadata, release script, and repository contract
+  all use the new slug.
+- The repository currently has no published Releases and no tags. Therefore an
+  actual release artifact download and Sparkle installation cannot be exercised;
+  URL/feed wiring is verified, and end-to-end download remains a first-release
+  gate rather than a hidden success claim. No App was installed while checking
+  this.
+- GitHub Pages is not enabled. Public code search found no external workflow
+  using `voltwake/cardputer-codex-deck` as an Action. Existing PR numbers and
+  history, including PRs 1–7, remained available under the new repository URL.
 
 The completed multi-device Goal evidence is preserved separately in
 [`MULTI_DEVICE_GOAL_ACCEPTANCE.md`](MULTI_DEVICE_GOAL_ACCEPTANCE.md).
