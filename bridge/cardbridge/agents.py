@@ -194,15 +194,27 @@ class AgentSession:
     # the 1/8 history while several sessions run concurrently.
     prompt_ms: int = 0
 
-    def as_dict(self) -> dict[str, object]:
+    def as_dict(self, *, acknowledged_at_ms: int | None = None) -> dict[str, object]:
+        acknowledged = (
+            acknowledged_at_ms is not None and acknowledged_at_ms == self.updated_ms
+        )
+        quiet_acknowledged = acknowledged and self.status in {"ready", "blocked"}
         return {
             "id": _text(self.id, _SESSION_ID_CHAR_LIMIT),
             "title": _text(self.title, _TITLE_CHAR_LIMIT),
             "project": _text(self.project, _PROJECT_CHAR_LIMIT),
-            "status": self.status,
-            "phase": self.phase,
-            "activity": public_activity_text(self.activity) or "Session ready",
-            "unread": self.unread,
+            # Acknowledgement is device-scoped. Only the device that sent the
+            # ack gets the quiet idle/ready presentation; the shared Agent
+            # session remains unchanged for every other device.
+            "status": "idle" if quiet_acknowledged else self.status,
+            "phase": "" if quiet_acknowledged else self.phase,
+            "activity": (
+                "Session ready"
+                if quiet_acknowledged
+                else public_activity_text(self.activity) or "Session ready"
+            ),
+            "unread": self.unread
+            and (acknowledged_at_ms is None or acknowledged_at_ms != self.updated_ms),
             "updated_ms": self.updated_ms,
         }
 
@@ -585,7 +597,12 @@ class AgentStore:
             self._changed()
         return changed
 
-    def snapshot(self, limit: int = AGENT_LIMIT) -> dict[str, object]:
+    def snapshot(
+        self,
+        limit: int = AGENT_LIMIT,
+        *,
+        acknowledged: dict[str, int] | None = None,
+    ) -> dict[str, object]:
         # Left/right is session history, so keep its wire order recent-first.
         # Status priority previously let old completed work crowd out a newly
         # discovered desktop session when Hooks were unavailable.
@@ -614,7 +631,12 @@ class AgentStore:
                 if self.quota_available and self.five_hour
                 else None,
             },
-            "items": [session.as_dict() for session in selected],
+            "items": [
+                session.as_dict(
+                    acknowledged_at_ms=(acknowledged or {}).get(session.id)
+                )
+                for session in selected
+            ],
         }
 
     def _trim(self) -> None:

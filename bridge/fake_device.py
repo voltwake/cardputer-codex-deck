@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from cardbridge._generated_version import (
-    CAPABILITIES,
     DEVICE_PROTOCOL_MAJOR,
     DEVICE_PROTOCOL_MINOR,
+    FIRMWARE_CAPABILITIES,
     FIRMWARE_VERSION,
 )
 from cardbridge.protocol import AUDIO_SAMPLES_PER_FRAME, encode_message, pack_audio
@@ -27,11 +27,25 @@ class FakeDevice:
         udp_port: int,
         device_id: str = "fakecardputer001",
         state_path: Path | None = None,
+        vendor: str = "fake",
+        model: str = "fake-cardputer",
+        name: str = "Fake Cardputer",
+        capabilities: list[str] | tuple[str, ...] | None = None,
+        protocol_minor: int | None = None,
     ) -> None:
         self.host = host
         self.tcp_port = tcp_port
         self.udp_port = udp_port
         self.device_id = device_id
+        self.vendor = vendor
+        self.model = model
+        self.name = name
+        self.capabilities = tuple(
+            FIRMWARE_CAPABILITIES if capabilities is None else capabilities
+        )
+        self.protocol_minor = (
+            DEVICE_PROTOCOL_MINOR if protocol_minor is None else protocol_minor
+        )
         self.state_path = state_path
         self.token = self._load_token()
         self.socket: socket.socket | None = None
@@ -61,15 +75,17 @@ class FakeDevice:
             "dev_id": self.device_id,
             "token": self.token,
             "device": {
-                "model": "fake-cardputer",
+                "vendor": self.vendor,
+                "model": self.model,
+                "name": self.name,
                 "firmware": FIRMWARE_VERSION,
                 "build": "test",
             },
             "protocol": {
                 "major": DEVICE_PROTOCOL_MAJOR,
-                "minor": DEVICE_PROTOCOL_MINOR,
+                "minor": self.protocol_minor,
             },
-            "capabilities": list(CAPABILITIES),
+            "capabilities": list(self.capabilities),
         }
         self.send(hello)
         response = self.receive()
@@ -115,6 +131,29 @@ class FakeDevice:
         if not line:
             raise ConnectionError("bridge closed the connection")
         return json.loads(line)
+
+    def request_topics(self, topics: list[str], request_id: int = 1) -> list[dict[str, Any]]:
+        self.send({"t": "sync_req", "id": request_id, "topics": topics})
+        return [self.receive() for _ in topics]
+
+    def subscribe(self, topics: list[str], min_interval_ms: int = 500, request_id: int = 1) -> dict[str, Any]:
+        self.send(
+            {
+                "t": "sync_subscribe",
+                "id": request_id,
+                "topics": topics,
+                "min_interval_ms": min_interval_ms,
+            }
+        )
+        return self.receive()
+
+    def claim_audio(self) -> dict[str, Any]:
+        self.send({"t": "audio_claim"})
+        return self.receive()
+
+    def release_audio(self) -> dict[str, Any]:
+        self.send({"t": "audio_release"})
+        return self.receive()
 
     def key(self, key: str, action: str, modifiers: list[str] | None = None) -> None:
         self.send({"t": "key", "k": key, "m": modifiers or [], "a": action})
@@ -167,12 +206,43 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=7788)
     parser.add_argument("--udp-port", type=int, default=7789)
     parser.add_argument("--pair-code")
-    parser.add_argument("--state", type=Path, default=Path(".fake_device.json"))
+    parser.add_argument("--id", dest="device_id", default="fakecardputer001")
+    parser.add_argument("--vendor", default="fake")
+    parser.add_argument("--model", default="fake-cardputer")
+    parser.add_argument("--name", default="Fake Cardputer")
+    parser.add_argument(
+        "--capability",
+        dest="capabilities",
+        action="append",
+        help="capability to declare; repeat to build a standard-device profile",
+    )
+    parser.add_argument("--protocol-minor", type=int)
+    parser.add_argument(
+        "--state",
+        type=Path,
+        help="token cache path (defaults to one cache per device ID)",
+    )
     parser.add_argument("--text", default="Hello, Cardputer!\n")
     parser.add_argument("--audio-seconds", type=float, default=2.0)
     args = parser.parse_args()
 
-    device = FakeDevice(args.host, args.port, args.udp_port, state_path=args.state)
+    default_state = (
+        Path(".fake_device.json")
+        if args.device_id == "fakecardputer001"
+        else Path(f".fake_device-{args.device_id}.json")
+    )
+    device = FakeDevice(
+        args.host,
+        args.port,
+        args.udp_port,
+        device_id=args.device_id,
+        state_path=args.state or default_state,
+        vendor=args.vendor,
+        model=args.model,
+        name=args.name,
+        capabilities=args.capabilities,
+        protocol_minor=args.protocol_minor,
+    )
     try:
         device.connect(args.pair_code)
         device.type_text(args.text)

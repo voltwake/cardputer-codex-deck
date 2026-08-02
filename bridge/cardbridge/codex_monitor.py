@@ -12,6 +12,7 @@ from typing import Any
 from ._generated_version import AGENT_VERSION
 
 from .agents import AGENT_LIMIT, AgentStore
+from .usage import TokenUsageStore
 
 LOG = logging.getLogger("cardbridge.codex")
 APP_SERVER_STREAM_LIMIT = 4 * 1024 * 1024
@@ -219,8 +220,14 @@ class CodexAppServerClient:
 
 
 class CodexMonitor:
-    def __init__(self, store: AgentStore, executable: str | None = None) -> None:
+    def __init__(
+        self,
+        store: AgentStore,
+        executable: str | None = None,
+        usage: TokenUsageStore | None = None,
+    ) -> None:
         self.store = store
+        self.usage = usage or TokenUsageStore()
         self.executables = [executable] if executable else find_codex_candidates()
         self.executable = self.executables[0] if self.executables else None
         self.client: CodexAppServerClient | None = None
@@ -232,6 +239,7 @@ class CodexMonitor:
     async def start(self) -> None:
         if not self.executables:
             LOG.warning("Codex executable not found; agent monitor disabled")
+            self.usage.set_unavailable("app_server_unavailable")
             return
         self._stopping = False
         self.task = asyncio.create_task(self._run())
@@ -285,6 +293,8 @@ class CodexMonitor:
 
         quota_mode = quota_mode_from_account(account)
         self.store.set_quota_mode(quota_mode)
+        if quota_mode == "api" and not self.usage.available:
+            self.usage.set_unavailable("provider_unsupported")
         if quota_mode != "subscription":
             return
 
@@ -333,7 +343,9 @@ class CodexMonitor:
                 await asyncio.sleep(10)
 
     async def _notification(self, method: str, params: dict[str, Any]) -> None:
-        if method == "account/rateLimits/updated":
+        if method == "thread/tokenUsage/updated":
+            self.usage.update_notification(params)
+        elif method == "account/rateLimits/updated":
             rate_limits = params.get("rateLimits")
             if self.store.quota_available and isinstance(rate_limits, dict):
                 self.store.update_rate_limits({"rateLimits": rate_limits})

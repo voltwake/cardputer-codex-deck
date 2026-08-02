@@ -92,9 +92,10 @@ private struct MenuBarStatusLabel: View {
     private var accessibilityStatus: String {
         switch client.connectionState {
         case .connected:
-            return client.snapshot.devices.isEmpty
+            let count = client.snapshot.devices.count
+            return count == 0
                 ? L10n.text("桥接器已就绪")
-                : L10n.text("M5 已连接")
+                : L10n.format("%@ 台设备已连接", String(count))
         case .connecting:
             return L10n.text("正在连接桥接器…")
         case let .incompatible(message), let .failed(message):

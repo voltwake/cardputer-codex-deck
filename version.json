@@ -10,7 +10,7 @@
   },
   "agent_api": {
     "major": 1,
-    "minor": 0
+    "minor": 1
   },
   "firmware": {
     "version": "0.3.0",
@@ -18,7 +18,7 @@
   },
   "device_protocol": {
     "major": 2,
-    "minor": 0
+    "minor": 1
   },
   "config_schema": 2,
   "compatibility": {
@@ -30,11 +30,26 @@
     "feed_url": "https://raw.githubusercontent.com/voltwake/cardputer-codex-deck/main/release/appcast.xml",
     "public_ed_key": "d3fvdw4bGTCUoKuACWMwrQ2ZAF6VgyvaPBdw+U5iwkQ="
   },
-  "capabilities": [
-    "control.keys.v1",
-    "audio.pcm16-16k.v1",
-    "agents.snapshot.v1",
-    "agents.phase.v1",
-    "quota.v1"
-  ]
+  "capability_profiles": {
+    "agent": [
+      "control.keys.v1",
+      "audio.pcm16-16k.v1",
+      "agents.snapshot.v1",
+      "agents.phase.v1",
+      "quota.v1",
+      "sync.subscribe.v1",
+      "bridge.status.v1",
+      "network.status.v1",
+      "usage.tokens.v1",
+      "usage.tokens.stream.v1",
+      "audio.lease.v1"
+    ],
+    "cardputer_firmware": [
+      "control.keys.v1",
+      "audio.pcm16-16k.v1",
+      "agents.snapshot.v1",
+      "agents.phase.v1",
+      "quota.v1"
+    ]
+  }
 }

@@ -7,7 +7,7 @@ from typing import Any
 from ._generated_version import (
     AGENT_BUILD,
     AGENT_VERSION,
-    CAPABILITIES,
+    AGENT_CAPABILITIES,
     DEVICE_PROTOCOL_MAJOR,
     DEVICE_PROTOCOL_MINOR,
     MIN_FIRMWARE_VERSION,
@@ -52,6 +52,8 @@ class DeviceCompatibility:
     negotiated_minor: int
     legacy: bool
     capabilities: tuple[str, ...]
+    vendor: str
+    name: str
     model: str
     firmware_version: str
     firmware_build: str
@@ -97,6 +99,8 @@ def negotiate_device(message: dict[str, Any]) -> DeviceCompatibility:
         device = {}
     if not isinstance(device, dict):
         raise ProtocolError("device metadata must be an object")
+    vendor = _short_text(device.get("vendor"), 48)
+    name = _short_text(device.get("name"), 64)
     model = _short_text(device.get("model"), 48)
     firmware_version = _short_text(device.get("firmware"), 24)
     firmware_build = _build_text(device.get("build"))
@@ -118,6 +122,8 @@ def negotiate_device(message: dict[str, Any]) -> DeviceCompatibility:
             negotiated_minor=0,
             legacy=True,
             capabilities=tuple(sorted(_LEGACY_CAPABILITIES)),
+            vendor=vendor,
+            name=name,
             model=model,
             firmware_version=firmware_version,
             firmware_build=firmware_build,
@@ -167,7 +173,7 @@ def negotiate_device(message: dict[str, Any]) -> DeviceCompatibility:
         item for item in raw_capabilities
         if isinstance(item, str) and 0 < len(item) <= 64
     }
-    supported = _LEGACY_CAPABILITIES if legacy else frozenset(CAPABILITIES)
+    supported = _LEGACY_CAPABILITIES if legacy else frozenset(AGENT_CAPABILITIES)
     negotiated = tuple(sorted(clean_capabilities & supported))
     return DeviceCompatibility(
         protocol_major=major,
@@ -175,6 +181,8 @@ def negotiate_device(message: dict[str, Any]) -> DeviceCompatibility:
         negotiated_minor=0 if legacy else min(minor, DEVICE_PROTOCOL_MINOR),
         legacy=legacy,
         capabilities=negotiated,
+        vendor=vendor,
+        name=name,
         model=model,
         firmware_version=firmware_version,
         firmware_build=firmware_build,

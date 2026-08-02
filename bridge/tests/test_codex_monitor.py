@@ -16,6 +16,7 @@ from cardbridge.codex_monitor import (
     quota_available_from_account,
     quota_mode_from_account,
 )
+from cardbridge.usage import TokenUsageStore
 
 
 class CodexMonitorHelpersTests(unittest.TestCase):
@@ -90,6 +91,36 @@ class CodexMonitorHelpersTests(unittest.TestCase):
 
 
 class CodexMonitorFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_token_usage_notification_updates_the_public_store(self) -> None:
+        store = AgentStore()
+        usage = TokenUsageStore()
+        monitor = CodexMonitor(store, executable="/fake/codex", usage=usage)
+
+        await monitor._notification(
+            "thread/tokenUsage/updated",
+            {
+                "threadId": "thread-a",
+                "turnId": "turn-a",
+                "timestamp_ms": 1_000,
+                "tokenUsage": {
+                    "total": {
+                        "totalTokens": 25,
+                        "inputTokens": 10,
+                        "cachedInputTokens": 2,
+                        "outputTokens": 12,
+                        "reasoningOutputTokens": 1,
+                    },
+                    "last": {"totalTokens": 25},
+                    "modelContextWindow": 1000,
+                },
+            },
+        )
+
+        snapshot = usage.snapshot()
+        self.assertTrue(snapshot["available"])
+        self.assertEqual(snapshot["source"], "codex_app_server")
+        self.assertEqual(snapshot["sessions"][0]["total"]["total"], 25)
+
     async def test_rate_limit_failure_clears_stale_values_but_keeps_subscription(self) -> None:
         class FailingLimitsClient:
             async def request(self, method: str, params: object) -> dict:

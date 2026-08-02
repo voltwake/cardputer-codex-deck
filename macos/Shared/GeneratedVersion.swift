@@ -7,10 +7,23 @@ enum GeneratedVersion {
     static let agent = "1.1.0"
     static let agentBuild = 9
     static let agentAPIMajor = 1
-    static let agentAPIMinor = 0
+    static let agentAPIMinor = 1
     static let deviceProtocolMajor = 2
-    static let deviceProtocolMinor = 0
+    static let deviceProtocolMinor = 1
     static let capabilities = [
+        "control.keys.v1",
+        "audio.pcm16-16k.v1",
+        "agents.snapshot.v1",
+        "agents.phase.v1",
+        "quota.v1",
+        "sync.subscribe.v1",
+        "bridge.status.v1",
+        "network.status.v1",
+        "usage.tokens.v1",
+        "usage.tokens.stream.v1",
+        "audio.lease.v1"
+    ]
+    static let firmwareCapabilities = [
         "control.keys.v1",
         "audio.pcm16-16k.v1",
         "agents.snapshot.v1",

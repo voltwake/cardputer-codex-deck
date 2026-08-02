@@ -2,6 +2,11 @@
 
 These are the current documents an installer or AI agent should use:
 
+- [`GOAL.md`](GOAL.md) — active multi-device and desktop Agent
+  standardization objective, compatibility boundaries, work packages, and
+  acceptance criteria.
+- [`GOAL_ACCEPTANCE.md`](GOAL_ACCEPTANCE.md) — current automated and
+  non-content Token evidence plus the SR-only physical acceptance step.
 - [`BRANDING.md`](BRANDING.md) — public Codex Deck name and internal
   CardBridge compatibility identifiers.
 - [`INSTALL.md`](INSTALL.md) — prebuilt and source installation, permissions,
@@ -18,8 +23,8 @@ These are the current documents an installer or AI agent should use:
   cannot be configured from a checkout.
 - [`SECURITY.md`](../SECURITY.md) — threat model and reporting policy.
 
-`GOAL.md` remains the product requirements record. `MAC_MENU_BAR_APP_PLAN.md`
-and older sections of `VALIDATION.md` are historical engineering records, not
-the canonical installation instructions. Do not use a historical version
-number or old BlackHole-only workflow from those records when installing the
-current release.
+`GOAL.md` is the active product objective, but it is not an installation guide.
+`MAC_MENU_BAR_APP_PLAN.md` and older sections of `VALIDATION.md` are historical
+engineering records, not current implementation or installation instructions.
+Do not use a historical version number or old BlackHole-only workflow from
+those records when installing the current release.

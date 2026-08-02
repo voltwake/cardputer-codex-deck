@@ -99,11 +99,24 @@ class BridgeConfig:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(self.path.parent, 0o700)
 
-    def pair(self, device_id: str, device_name: str = "Cardputer") -> str:
+    def pair(
+        self,
+        device_id: str,
+        device_name: str = "Cardputer",
+        *,
+        vendor: str = "",
+        model: str = "",
+        firmware: str = "",
+        firmware_build: str = "",
+    ) -> str:
         token = secrets.token_hex(32)  # 32 cryptographically-random bytes.
         with self._lock:
             record = {
                 "name": device_name,
+                "vendor": vendor,
+                "model": model,
+                "firmware": firmware,
+                "firmware_build": firmware_build,
                 "paired_at": int(time.time()),
             }
             if self._token_store is None:
@@ -142,6 +155,10 @@ class BridgeConfig:
                     {
                         "id": device_id,
                         "name": str(record.get("name") or "Cardputer"),
+                        "vendor": str(record.get("vendor") or ""),
+                        "model": str(record.get("model") or ""),
+                        "firmware": str(record.get("firmware") or ""),
+                        "firmware_build": str(record.get("firmware_build") or ""),
                         "paired_at": int(record.get("paired_at") or 0),
                     }
                 )

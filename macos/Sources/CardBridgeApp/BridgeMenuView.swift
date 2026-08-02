@@ -5,22 +5,28 @@ struct BridgeMenuView: View {
     @ObservedObject var client: AgentClient
     @ObservedObject private var microphoneDriver = MicrophoneDriverManager.shared
 
-    private var connectedDevice: BridgeSnapshot.Device? {
-        client.snapshot.devices.first
+    private var connectedDevices: [BridgeSnapshot.Device] {
+        client.snapshot.devices
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
 
-            if let pairing = client.snapshot.pairing {
-                pairingCard(pairing)
+            if !client.snapshot.pairings.isEmpty {
+                ForEach(client.snapshot.pairings) { pairing in
+                    pairingCard(pairing)
+                }
+            } else if let pairing = client.snapshot.pairing {
+                legacyPairingCard(pairing)
             }
 
-            if let device = connectedDevice {
-                deviceCard(device)
-            } else {
+            if connectedDevices.isEmpty {
                 emptyDeviceCard
+            } else {
+                ForEach(connectedDevices) { device in
+                    deviceCard(device)
+                }
             }
 
             Divider()
@@ -96,10 +102,54 @@ struct BridgeMenuView: View {
         .background(.blue.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
     }
 
+    private func legacyPairingCard(_ pairing: BridgeSnapshot.Pairing) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(L10n.text("设备请求配对"), systemImage: "link.badge.plus")
+                .font(.subheadline.weight(.semibold))
+            Text(pairing.code)
+                .font(.system(size: 30, weight: .bold, design: .monospaced))
+                .textSelection(.enabled)
+            Text(L10n.text("在设备上输入这个六位码"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(.blue.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func pairingCard(_ pairing: BridgeSnapshot.PairingRequest) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(
+                    pairing.name ?? pairing.model ?? pairing.deviceID,
+                    systemImage: "link.badge.plus"
+                )
+                .font(.subheadline.weight(.semibold))
+                Spacer()
+                if let vendor = pairing.vendor, !vendor.isEmpty {
+                    Text(vendor).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Text(pairing.code)
+                .font(.system(size: 26, weight: .bold, design: .monospaced))
+                .textSelection(.enabled)
+            Text(L10n.text("在设备上输入这个六位码"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(.blue.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+    }
+
     private func deviceCard(_ device: BridgeSnapshot.Device) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("Cardputer ADV", systemImage: "rectangle.and.hand.point.up.left")
+                Label(
+                    device.name ?? device.model,
+                    systemImage: "rectangle.and.hand.point.up.left"
+                )
                     .font(.subheadline.weight(.semibold))
                 Spacer()
                 Text("已连接")
@@ -119,6 +169,34 @@ struct BridgeMenuView: View {
                     Text("协议").foregroundStyle(.secondary)
                     Text("\(device.protocol.major).\(device.protocol.minor) · \(device.compatibility)")
                 }
+                GridRow {
+                    Text("厂商/型号").foregroundStyle(.secondary)
+                    Text("\(device.vendor ?? "未知") · \(device.model)")
+                }
+                GridRow {
+                    Text("能力").foregroundStyle(.secondary)
+                    Text(
+                        device.capabilities.isEmpty
+                            ? L10n.text("未声明")
+                            : device.capabilities.joined(separator: ", ")
+                    )
+                    .lineLimit(3)
+                }
+                GridRow {
+                    Text("最后活动").foregroundStyle(.secondary)
+                    if device.lastSeenMS > 0 {
+                        Text(
+                            Date(timeIntervalSince1970: Double(device.lastSeenMS) / 1000),
+                            style: .relative
+                        )
+                    } else {
+                        Text(L10n.text("未知"))
+                    }
+                }
+                GridRow {
+                    Text("音频租约").foregroundStyle(.secondary)
+                    Text(device.audioLease ?? L10n.text("未知"))
+                }
             }
             .font(.caption)
         }
@@ -131,9 +209,9 @@ struct BridgeMenuView: View {
             Image(systemName: "wifi")
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
-                Text("等待 M5 连接")
+                Text(L10n.text("等待设备连接"))
                     .font(.subheadline.weight(.medium))
-                Text("确保 Mac 和 Cardputer 位于同一网络")
+                Text(L10n.text("确保 Mac 和设备位于同一网络"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -174,6 +252,15 @@ struct BridgeMenuView: View {
                     : L10n.text("未连接"),
                 symbol: "terminal",
                 healthy: client.snapshot.codex.connected
+            )
+            let usage = client.snapshot.codex.usage
+            HealthRow(
+                title: L10n.text("Token 统计"),
+                detail: usage?.available == true
+                    ? L10n.format("%@ 个会话", String(usage?.sessions.count ?? 0))
+                    : L10n.text("不可用/未知"),
+                symbol: "number",
+                healthy: usage?.available == true
             )
         }
     }
@@ -230,7 +317,10 @@ struct BridgeMenuView: View {
     private var statusTitle: String {
         switch client.connectionState {
         case .connected:
-            if connectedDevice != nil { return L10n.text("M5 已连接") }
+            if connectedDevices.count == 1 { return L10n.text("1 台设备已连接") }
+            if !connectedDevices.isEmpty {
+                return L10n.format("%@ 台设备已连接", String(connectedDevices.count))
+            }
             return L10n.text("桥接器已就绪")
         case .connecting:
             return L10n.text("正在连接桥接器…")
@@ -244,7 +334,7 @@ struct BridgeMenuView: View {
     private var statusSymbol: String {
         switch client.connectionState {
         case .connected:
-            return connectedDevice == nil ? "checkmark" : "link"
+            return connectedDevices.isEmpty ? "checkmark" : "link"
         case .connecting:
             return "arrow.triangle.2.circlepath"
         case .incompatible, .failed:
@@ -257,7 +347,7 @@ struct BridgeMenuView: View {
     private var statusColor: Color {
         switch client.connectionState {
         case .connected:
-            return connectedDevice == nil ? .blue : .green
+            return connectedDevices.isEmpty ? .blue : .green
         case .connecting:
             return .orange
         case .incompatible, .failed:

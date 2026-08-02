@@ -14,14 +14,24 @@ from pathlib import Path
 from typing import Any
 
 from .agents import AgentStore
-from .audio import CARDBRIDGE_FEED_DEVICE, BlackHoleAudioOutput, NullAudioOutput
+from .audio import (
+    CARDBRIDGE_FEED_DEVICE,
+    BlackHoleAudioOutput,
+    JitterBuffer,
+    NullAudioOutput,
+)
 from .codex_monitor import CodexMonitor, start_hook_receiver
 from .codex_hooks import hooks_installed, update_hooks
 from .config import BridgeConfig
 from .control_server import AgentControlServer
+from .devices import DeviceRegistry, DeviceSession, PairingRequest
 from .keyboard import KeyInjector
 from .protocol import (
+    MAX_SUBSCRIPTION_INTERVAL_MS,
     MAX_JSON_LINE,
+    MIN_SUBSCRIPTION_INTERVAL_MS,
+    TOPIC_READ_CAPABILITY,
+    TOPIC_SUBSCRIPTION_CAPABILITIES,
     ProtocolError,
     decode_message,
     encode_message,
@@ -35,7 +45,7 @@ from ._generated_version import (
     DEVICE_PROTOCOL_MAJOR,
     DEVICE_PROTOCOL_MINOR,
 )
-from .status import ConnectedDevice
+from .usage import TokenUsageStore
 from .versioning import CompatibilityError, DeviceCompatibility, negotiate_device
 
 LOG = logging.getLogger("cardbridge")
@@ -101,6 +111,7 @@ class BridgeApp:
             if no_audio
             else BlackHoleAudioOutput(audio_device, jitter_ms, gain)
         )
+        self.jitter_ms = jitter_ms
         self.dry_run = dry_run
         self.advertise = advertise
         self.pair_code_factory = pair_code_factory or (lambda: f"{secrets.randbelow(1_000_000):06d}")
@@ -117,10 +128,18 @@ class BridgeApp:
         self.status_seq = 0
         self.status_task: asyncio.Task[None] | None = None
         self.shutdown_requested = asyncio.Event()
-        self.connected_devices: dict[asyncio.StreamWriter, ConnectedDevice] = {}
+        self.registry = DeviceRegistry()
+        # Kept as a read-only compatibility view for source integrations that
+        # used the pre-registry attribute. All business logic uses registry.
+        self.connected_devices: dict[asyncio.StreamWriter, DeviceSession] = {}
         self.pairing_status: dict[str, object] | None = None
+        self.audio_lease_owner_id: str | None = None
+        self.audio_lease_idle_ms = 3_000
+        self._held_key_owners: dict[str, dict[int, list[str]]] = {}
+        self._injected_key_modifiers: dict[str, list[str]] = {}
         self.agents = AgentStore()
-        self.codex_monitor = CodexMonitor(self.agents)
+        self.usage = TokenUsageStore()
+        self.codex_monitor = CodexMonitor(self.agents, usage=self.usage)
         self.hook_transport: asyncio.DatagramTransport | None = None
         self.codex_hooks_installed = hooks_installed() if enable_agents else False
         self._agent_clients: dict[asyncio.StreamWriter, str] = {}
@@ -147,6 +166,7 @@ class BridgeApp:
         self.network_available = self.lan_address != "127.0.0.1"
         self.last_error = ""
         self.agents.set_on_change(self._agent_changed)
+        self.usage.set_on_change(self._usage_changed)
         self._start_audio_output()
         self.keyboard.check_accessibility(prompt=not self.dry_run)
         loop = asyncio.get_running_loop()
@@ -227,10 +247,13 @@ class BridgeApp:
             self.tcp_server.close()
             await self.tcp_server.wait_closed()
             self.tcp_server = None
-        for writer in tuple(self.connected_devices):
-            writer.close()
+        for session in self.registry.clear():
+            self._cleanup_session(session, close_writer=True)
         self.connected_devices.clear()
         self.active_tokens.clear()
+        self.audio_lease_owner_id = None
+        self._held_key_owners.clear()
+        self._injected_key_modifiers.clear()
         if self.udp_transport is not None:
             self.udp_transport.close()
             self.udp_transport = None
@@ -251,8 +274,8 @@ class BridgeApp:
         if state == "ready":
             if not self.network_available:
                 issues.append("network")
-            state = "connected" if self.connected_devices else "ready"
-            if self.connected_devices:
+            state = "connected" if self.registry.all() else "ready"
+            if self.registry.all():
                 if not accessibility:
                     issues.append("accessibility")
                 if not audio_running:
@@ -260,6 +283,18 @@ class BridgeApp:
             if issues:
                 state = "degraded"
         jitter = self.audio.jitter
+        pairing_requests = self.registry.pairing_snapshots()
+        # Preserve the original single-object field for old App builds while
+        # exposing the complete concurrent pairing set to new clients.
+        pairing = pairing_requests[0] if pairing_requests else None
+        legacy_pairing = None
+        if pairing_requests:
+            first = pairing_requests[0]
+            legacy_pairing = {
+                "device_id": first["device_id"],
+                "code": first["code"],
+                "created_at_ms": first["created_at_ms"],
+            }
         return {
             "t": "snapshot",
             "seq": self.status_seq,
@@ -292,6 +327,7 @@ class BridgeApp:
                 "lost": jitter.lost,
                 "late": jitter.late,
                 "resyncs": jitter.resyncs,
+                "lease_owner_id": self.audio_lease_owner_id,
             },
             "codex": {
                 "enabled": self.enable_agents,
@@ -302,16 +338,15 @@ class BridgeApp:
                 "sessions": len(self.agents.sessions),
                 "quota_mode": self.agents.quota_mode,
                 "quota_available": self.agents.quota_available,
+                "usage": self.usage.snapshot(),
             },
             "devices": [
-                device.snapshot()
-                for device in sorted(
-                    self.connected_devices.values(),
-                    key=lambda item: item.connected_at_ms,
-                )
+                device.snapshot(audio_owner_id=self.audio_lease_owner_id)
+                for device in self.registry.all()
             ],
             "paired_devices": self.config.paired_devices(),
-            "pairing": dict(self.pairing_status) if self.pairing_status else None,
+            "pairing": legacy_pairing or pairing,
+            "pairings": pairing_requests,
         }
 
     async def handle_control_command(
@@ -334,9 +369,11 @@ class BridgeApp:
                 return {"ok": False, "error": "invalid_device_id"}
             removed = self.config.unpair(device_id)
             if removed:
-                for writer, device in tuple(self.connected_devices.items()):
-                    if device.device_id == device_id:
-                        writer.close()
+                session = self.registry.get(device_id)
+                if session is not None:
+                    self._cleanup_session(session, close_writer=True)
+                    self.registry.remove(session)
+                    self._sync_connected_devices()
                 self._status_changed()
             return {"ok": removed, "device_id": device_id}
         if name in {"install_hooks", "uninstall_hooks"}:
@@ -356,6 +393,8 @@ class BridgeApp:
 
     def _status_changed(self) -> None:
         self.status_seq += 1
+        for device in self.registry.all():
+            device.pending_topics.update({"bridge.status", "network.status"})
         try:
             asyncio.get_running_loop().call_soon(
                 lambda: asyncio.create_task(self._publish_status())
@@ -368,15 +407,24 @@ class BridgeApp:
             await self.control_server.publish()
 
     async def _publish_status_periodically(self) -> None:
-        ticks = 0
+        loop = asyncio.get_running_loop()
+        next_network = loop.time() + 6.0
+        next_audio = loop.time() + 10.0
+        next_status = loop.time() + 2.0
         while True:
-            await asyncio.sleep(2)
-            ticks += 1
-            if ticks % 3 == 0:
+            await asyncio.sleep(0.05)
+            now = loop.time()
+            await self._flush_topic_subscriptions()
+            if now >= next_network:
                 await self._refresh_network()
-            if ticks % 5 == 0 and (self.audio_error or not self.audio.is_running()):
+                next_network = now + 6.0
+            if now >= next_audio and (self.audio_error or not self.audio.is_running()):
                 self._start_audio_output()
-            await self._publish_status()
+                next_audio = now + 10.0
+            if now >= next_status:
+                self._expire_audio_lease()
+                await self._publish_status()
+                next_status = now + 2.0
 
     def _start_audio_output(self) -> None:
         if self.audio_disabled:
@@ -483,13 +531,12 @@ class BridgeApp:
     ) -> None:
         peer = writer.get_extra_info("peername")
         peer_ip = str(peer[0]) if peer else "unknown"
+        connection_id = id(writer)
         device_id: str | None = None
         authenticated_token: str | None = None
         pending_code: str | None = None
         compatibility: DeviceCompatibility | None = None
-        connected_device: ConnectedDevice | None = None
-        pair_attempts = 0
-        pressed: dict[str, list[str]] = {}
+        session: DeviceSession | None = None
         LOG.info("control connection from %s", peer_ip)
         try:
             while authenticated_token is None:
@@ -508,6 +555,7 @@ class BridgeApp:
                     supplied_token = message.get("token")
                     if self.config.validate(device_id, supplied_token):
                         authenticated_token = str(supplied_token)
+                        self.registry.remove_pairing(connection_id)
                         assert compatibility is not None
                         await self._send(
                             writer,
@@ -523,7 +571,17 @@ class BridgeApp:
                         await self._send(writer, {"t": "auth_error"})
                     else:
                         pending_code = self.pair_code_factory()
-                        self._show_pair_code(pending_code, device_id)
+                        assert compatibility is not None
+                        request = PairingRequest(
+                            connection_id=connection_id,
+                            device_id=device_id,
+                            code=pending_code,
+                            vendor=compatibility.vendor,
+                            name=compatibility.name,
+                            model=compatibility.model,
+                        )
+                        self.registry.add_pairing(request)
+                        self._show_pair_code(request)
                         assert compatibility is not None
                         await self._send(
                             writer,
@@ -535,18 +593,31 @@ class BridgeApp:
                             },
                         )
                 elif message_type == "pair" and device_id and pending_code:
-                    if str(message.get("code", "")) != pending_code:
+                    request = self.registry.pairing_for(connection_id)
+                    if request is None:
+                        raise ProtocolError("pairing code expired")
+                    if str(message.get("code", "")) != request.code:
                         # A six-digit code must not be brute-forceable: after a
                         # few misses drop the link. Reconnecting shows a fresh
                         # code, so an attacker cannot enumerate one code.
-                        pair_attempts += 1
-                        if pair_attempts >= 3:
+                        request.failures += 1
+                        if request.failures >= 3:
                             raise ProtocolError("too many wrong pairing codes")
                         await self._send(writer, {"t": "pair_error"})
                         continue
-                    authenticated_token = self.config.pair(device_id)
                     if compatibility is None:
                         raise ProtocolError("pairing attempted before hello")
+                    authenticated_token = self.config.pair(
+                        device_id,
+                        compatibility.name
+                        or compatibility.model
+                        or ("Cardputer" if compatibility.legacy else "Device"),
+                        vendor=compatibility.vendor,
+                        model=compatibility.model,
+                        firmware=compatibility.firmware_version,
+                        firmware_build=compatibility.firmware_build,
+                    )
+                    self.registry.remove_pairing(connection_id)
                     await self._send(
                         writer,
                         {
@@ -568,39 +639,44 @@ class BridgeApp:
             assert device_id is not None
             if compatibility is None:
                 raise ProtocolError("authenticated without protocol negotiation")
-            connected_device = ConnectedDevice(
+            session = DeviceSession(
                 device_id=device_id,
                 peer_ip=peer_ip,
                 token=authenticated_token,
                 compatibility=compatibility,
+                writer=writer,
+                jitter=self._new_jitter_buffer(),
             )
+            old_session = self.registry.register(session)
+            if old_session is not None:
+                self._cleanup_session(old_session, close_writer=True)
             self.active_tokens[authenticated_token] = (device_id, peer_ip)
             self._agent_clients[writer] = authenticated_token
-            self.connected_devices[writer] = connected_device
-            self.pairing_status = None
+            self._sync_connected_devices()
             self._status_changed()
             LOG.info("device %s authenticated", device_id)
-            await self._send_agent_snapshot(writer, authenticated_token, "agent_status")
-            await self._authenticated_loop(
-                reader, writer, pressed, authenticated_token, connected_device
-            )
+            if session.has_capability("agents.snapshot.v1"):
+                await self._send_agent_snapshot(session, "agent_status")
+            await self._authenticated_loop(reader, writer, authenticated_token, session)
         except (asyncio.TimeoutError, asyncio.IncompleteReadError):
             LOG.info("control connection timed out/closed: %s", peer_ip)
         except (ProtocolError, ConnectionError, OSError) as exc:
             LOG.warning("control connection rejected from %s: %s", peer_ip, exc)
         finally:
-            for key, modifiers in pressed.items():
-                self.keyboard.inject(key, "up", modifiers)
-            if authenticated_token and self.active_tokens.get(authenticated_token) == (
-                device_id,
-                peer_ip,
+            self.registry.remove_pairing(connection_id)
+            if session is not None:
+                self._cleanup_session(session, close_writer=False)
+                self.registry.remove(session)
+            if (
+                authenticated_token
+                and session is not None
+                and self.registry.get(device_id or "") is session
+                and self.active_tokens.get(authenticated_token) == (device_id, peer_ip)
             ):
                 self.active_tokens.pop(authenticated_token, None)
             self._agent_clients.pop(writer, None)
-            self.connected_devices.pop(writer, None)
-            if self.pairing_status and self.pairing_status.get("device_id") == device_id:
-                self.pairing_status = None
-            if connected_device is not None or device_id is not None:
+            self._sync_connected_devices()
+            if session is not None or device_id is not None:
                 self._status_changed()
             writer.close()
             try:
@@ -612,9 +688,8 @@ class BridgeApp:
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
-        pressed: dict[str, list[str]],
         token: str,
-        device: ConnectedDevice,
+        device: DeviceSession,
     ) -> None:
         missed = 0
         while True:
@@ -652,6 +727,9 @@ class BridgeApp:
             elif message_type == "pong":
                 continue
             elif message_type == "key":
+                if not device.has_capability("control.keys.v1"):
+                    await self._send_capability_error(writer, token, "control.keys.v1")
+                    continue
                 key = message.get("k")
                 action = message.get("a")
                 modifiers = message.get("m", [])
@@ -659,19 +737,39 @@ class BridgeApp:
                     continue
                 allowed = {"cmd", "shift", "alt", "ctrl"}
                 clean_modifiers = [item for item in modifiers if item in allowed]
-                if self.keyboard.inject(key, str(action), clean_modifiers):
-                    if action == "down":
-                        pressed[key] = clean_modifiers
-                    elif action == "up":
-                        pressed.pop(key, None)
+                self._handle_key(device, key, str(action), clean_modifiers)
             elif message_type == "agent_list_req":
+                if not device.has_capability("agents.snapshot.v1"):
+                    await self._send_capability_error(
+                        writer, token, "agents.snapshot.v1"
+                    )
+                    continue
                 limit = message.get("limit", 8)
                 clean_limit = max(1, min(8, int(limit))) if isinstance(limit, int) else 8
-                await self._send_agent_snapshot(writer, token, "agent_list", clean_limit)
+                await self._send_agent_snapshot(device, "agent_list", clean_limit)
             elif message_type == "agent_ack":
+                if not device.has_capability("agents.snapshot.v1"):
+                    await self._send_capability_error(
+                        writer, token, "agents.snapshot.v1"
+                    )
+                    continue
                 session_id = message.get("id")
                 if isinstance(session_id, str):
-                    self.agents.acknowledge(session_id)
+                    agent_session = self.agents.sessions.get(session_id)
+                    if agent_session is not None:
+                        device.acknowledge(session_id, agent_session.updated_ms)
+                        device.pending_topics.add("codex.sessions")
+                        await self._send_agent_snapshot(device, "agent_status")
+            elif message_type == "sync_req":
+                await self._handle_sync_request(device, message)
+            elif message_type == "sync_subscribe":
+                await self._handle_sync_subscribe(device, message)
+            elif message_type == "sync_unsubscribe":
+                await self._handle_sync_unsubscribe(device, message)
+            elif message_type == "audio_claim":
+                await self._handle_audio_claim(device)
+            elif message_type == "audio_release":
+                await self._handle_audio_release(device)
             else:
                 # Forward-compatible parser: ignore every unknown message type.
                 continue
@@ -691,8 +789,153 @@ class BridgeApp:
         writer.write(encode_message(message))
         await writer.drain()
 
+    def _new_jitter_buffer(self) -> JitterBuffer:
+        return JitterBuffer(self.jitter_ms)
+
+    def _sync_connected_devices(self) -> None:
+        self.connected_devices = {
+            session.writer: session for session in self.registry.all() if session.writer
+        }
+
+    def _handle_key(
+        self, device: DeviceSession, key: str, action: str, modifiers: list[str]
+    ) -> None:
+        if not key or len(key) > 64 or action not in {"down", "up"}:
+            return
+        connection_id = id(device.writer)
+        owners = self._held_key_owners.setdefault(key, {})
+        if action == "down":
+            if key in device.held_keys:
+                return
+            if not owners:
+                if not self.keyboard.inject(key, "down", modifiers):
+                    return
+                self._injected_key_modifiers[key] = list(modifiers)
+            owners[connection_id] = list(modifiers)
+            device.held_keys[key] = list(modifiers)
+            return
+
+        held_modifiers = device.held_keys.pop(key, None)
+        if held_modifiers is None:
+            return
+        owners.pop(connection_id, None)
+        if not owners:
+            self._held_key_owners.pop(key, None)
+            injected_modifiers = self._injected_key_modifiers.pop(key, held_modifiers)
+            self.keyboard.inject(key, "up", injected_modifiers)
+
+    def _release_session_keys(self, device: DeviceSession) -> None:
+        for key, modifiers in tuple(device.held_keys.items()):
+            self._handle_key(device, key, "up", modifiers)
+
+    def _cleanup_session(self, device: DeviceSession, *, close_writer: bool) -> None:
+        self._release_session_keys(device)
+        if self.audio_lease_owner_id == device.device_id:
+            current = self.registry.get(device.device_id)
+            if current is device or current is None:
+                self._release_audio_lease(device)
+            else:
+                # A same-ID replacement is already visible in the registry;
+                # release the old lease without touching the new session.
+                device.audio_lease_state = "none"
+                device.jitter.reset()
+                self.audio_lease_owner_id = None
+                self.audio.reset_stream()
+                self._notify_audio_lease()
+        device.jitter.reset()
+        device.subscriptions.clear()
+        device.pending_topics.clear()
+        if (
+            self.registry.get(device.device_id) is device
+            and self.active_tokens.get(device.token) == (device.device_id, device.peer_ip)
+        ):
+            self.active_tokens.pop(device.token, None)
+        if device.writer is not None:
+            self._agent_clients.pop(device.writer, None)
+            if close_writer and not device.writer.is_closing():
+                device.writer.close()
+
+    def _audio_owner(self) -> DeviceSession | None:
+        if self.audio_lease_owner_id is None:
+            return None
+        owner = self.registry.get(self.audio_lease_owner_id)
+        if owner is None:
+            self.audio_lease_owner_id = None
+        return owner
+
+    def _set_audio_lease(self, device: DeviceSession) -> None:
+        previous = self._audio_owner()
+        if previous is device:
+            device.audio_lease_state = "owner"
+            return
+        if previous is not None:
+            previous.audio_lease_state = "none"
+            previous.jitter.reset()
+        # Packets received while this session was not the owner are not a
+        # playback queue. Clear them before selecting the new stream, then let
+        # receive_audio append the packet that actually triggered takeover.
+        device.jitter.reset()
+        self.audio_lease_owner_id = device.device_id
+        device.audio_lease_state = "owner"
+        # AudioOutput's callback reads this active per-device buffer. It is not
+        # a shared input queue: ownership changes reset its boundary first.
+        self.audio.reset_stream()
+        self.audio.jitter = device.jitter
+        self._notify_audio_lease()
+        self._status_changed()
+
+    def _release_audio_lease(self, device: DeviceSession | None = None) -> None:
+        owner = self._audio_owner()
+        if owner is None:
+            return
+        if device is not None and owner is not device:
+            return
+        owner.audio_lease_state = "none"
+        owner.jitter.reset()
+        self.audio_lease_owner_id = None
+        self.audio.reset_stream()
+        self._notify_audio_lease()
+        self._status_changed()
+
+    def _expire_audio_lease(self) -> None:
+        owner = self._audio_owner()
+        if owner is None or owner.last_audio_ms <= 0:
+            return
+        if int(time.time() * 1000) - owner.last_audio_ms > self.audio_lease_idle_ms:
+            LOG.info("audio lease expired for %s after silence", owner.device_id)
+            self._release_audio_lease(owner)
+
+    def _notify_audio_lease(self) -> None:
+        try:
+            asyncio.get_running_loop().create_task(self._broadcast_audio_lease())
+        except RuntimeError:
+            pass
+
+    async def _broadcast_audio_lease(self) -> None:
+        owner = self._audio_owner()
+        for device in tuple(self.registry.all()):
+            if not device.has_capability("audio.lease.v1") or device.writer.is_closing():
+                continue
+            state = "available" if owner is None else (
+                "owner" if owner is device else "busy"
+            )
+            try:
+                await self._send(
+                    device.writer,
+                    {
+                        "t": "audio_lease",
+                        "state": state,
+                        "owner_id": owner.device_id if owner else None,
+                        "token": device.token,
+                    },
+                )
+            except (ConnectionError, OSError):
+                continue
+
     def _agent_changed(self) -> None:
         self._status_changed()
+        for device in self.registry.all():
+            device.pending_topics.add("codex.sessions")
         if self._agent_broadcast_pending:
             return
         self._agent_broadcast_pending = True
@@ -702,44 +945,368 @@ class BridgeApp:
 
     async def _broadcast_agent_status(self) -> None:
         self._agent_broadcast_pending = False
-        for writer, token in tuple(self._agent_clients.items()):
-            if writer.is_closing():
-                self._agent_clients.pop(writer, None)
+        for device in tuple(self.registry.all()):
+            if device.writer.is_closing() or not device.has_capability("agents.snapshot.v1"):
                 continue
             try:
-                await self._send_agent_snapshot(writer, token, "agent_status")
+                await self._send_agent_snapshot(device, "agent_status")
             except (ConnectionError, OSError):
-                self._agent_clients.pop(writer, None)
+                continue
+
+    def _usage_changed(self) -> None:
+        for device in self.registry.all():
+            device.pending_topics.add("codex.usage")
+        self._status_changed()
 
     async def _send_agent_snapshot(
         self,
-        writer: asyncio.StreamWriter,
-        token: str,
+        device: DeviceSession,
         message_type: str,
         limit: int = 8,
     ) -> None:
-        message = self.agents.snapshot(limit)
+        message = self.agents.snapshot(limit, acknowledged=device.ack_cursors)
         message["t"] = message_type
         message["provider"] = "codex"
-        message["token"] = token
+        message["token"] = device.token
+        await self._send(device.writer, message)
+
+    async def _send_capability_error(
+        self,
+        writer: asyncio.StreamWriter,
+        token: str,
+        required: str,
+        *,
+        topic: str | None = None,
+        request_id: object = None,
+    ) -> None:
+        message: dict[str, Any] = {
+            "t": "error",
+            "code": "capability_required",
+            "required_capability": required,
+            "token": token,
+        }
+        if topic is not None:
+            message["topic"] = topic
+        if request_id is not None:
+            message["id"] = request_id
         await self._send(writer, message)
 
-    def _show_pair_code(self, code: str, device_id: str) -> None:
+    @staticmethod
+    def _requested_topics(message: dict[str, Any]) -> list[str]:
+        raw_topics = message.get("topics")
+        if not isinstance(raw_topics, list):
+            return []
+        result: list[str] = []
+        for item in raw_topics:
+            if isinstance(item, str) and item in TOPIC_READ_CAPABILITY and item not in result:
+                result.append(item)
+        return result
+
+    @staticmethod
+    def _unsupported_topics(message: dict[str, Any]) -> list[str]:
+        raw_topics = message.get("topics")
+        if not isinstance(raw_topics, list):
+            return []
+        result: list[str] = []
+        for item in raw_topics:
+            if (
+                isinstance(item, str)
+                and item not in TOPIC_READ_CAPABILITY
+                and item not in result
+            ):
+                result.append(item)
+        return result
+
+    async def _send_unsupported_topic(
+        self,
+        device: DeviceSession,
+        topic: str,
+        request_id: object,
+    ) -> None:
+        message: dict[str, Any] = {
+            "t": "error",
+            "code": "unsupported_topic",
+            "topic": topic,
+            "token": device.token,
+        }
+        if request_id is not None:
+            message["id"] = request_id
+        await self._send(device.writer, message)
+
+    async def _handle_sync_request(
+        self, device: DeviceSession, message: dict[str, Any]
+    ) -> None:
+        request_id = message.get("id")
+        for topic in self._unsupported_topics(message):
+            await self._send_unsupported_topic(device, topic, request_id)
+        topics = self._requested_topics(message)
+        if not topics:
+            if self._unsupported_topics(message):
+                return
+            await self._send(
+                device.writer,
+                {
+                    "t": "error",
+                    "code": "invalid_topics",
+                    "id": request_id,
+                    "token": device.token,
+                },
+            )
+            return
+        for topic in topics:
+            required = TOPIC_READ_CAPABILITY[topic]
+            if not device.has_capability(required):
+                await self._send_capability_error(
+                    device.writer,
+                    device.token,
+                    required,
+                    topic=topic,
+                    request_id=request_id,
+                )
+                continue
+            await self._send_topic(device, topic, "sync_snapshot", request_id)
+
+    async def _handle_sync_subscribe(
+        self, device: DeviceSession, message: dict[str, Any]
+    ) -> None:
+        request_id = message.get("id")
+        if not device.has_capability("sync.subscribe.v1"):
+            await self._send_capability_error(
+                device.writer,
+                device.token,
+                "sync.subscribe.v1",
+                request_id=request_id,
+            )
+            return
+        for topic in self._unsupported_topics(message):
+            await self._send_unsupported_topic(device, topic, request_id)
+        topics = self._requested_topics(message)
+        accepted: list[str] = []
+        for topic in topics:
+            required = [TOPIC_READ_CAPABILITY[topic], *TOPIC_SUBSCRIPTION_CAPABILITIES[topic]]
+            missing = next((item for item in required if not device.has_capability(item)), None)
+            if missing is not None:
+                await self._send_capability_error(
+                    device.writer,
+                    device.token,
+                    missing,
+                    topic=topic,
+                    request_id=request_id,
+                )
+                continue
+            accepted.append(topic)
+
+        raw_interval = message.get("min_interval_ms")
+        if isinstance(raw_interval, int) and not isinstance(raw_interval, bool):
+            min_interval = max(
+                MIN_SUBSCRIPTION_INTERVAL_MS,
+                min(MAX_SUBSCRIPTION_INTERVAL_MS, raw_interval),
+            )
+        else:
+            min_interval = 1000
+        device.subscriptions = set(accepted)
+        device.min_interval_ms = min_interval
+        device.pending_topics.update(accepted)
+        await self._send(
+            device.writer,
+            {
+                "t": "sync_subscribed",
+                "id": request_id,
+                "topics": accepted,
+                "min_interval_ms": min_interval,
+                "token": device.token,
+            },
+        )
+
+    async def _handle_sync_unsubscribe(
+        self, device: DeviceSession, message: dict[str, Any]
+    ) -> None:
+        request_id = message.get("id")
+        if not device.has_capability("sync.subscribe.v1"):
+            # Treat the new request as unsupported for legacy/current M5
+            # clients rather than sending them a sync_* response they cannot
+            # negotiate or parse.
+            await self._send_capability_error(
+                device.writer,
+                device.token,
+                "sync.subscribe.v1",
+                request_id=request_id,
+            )
+            return
+        raw_topics = message.get("topics")
+        if isinstance(raw_topics, list):
+            removed = {
+                topic for topic in raw_topics if isinstance(topic, str)
+            }
+            device.subscriptions.difference_update(removed)
+            device.pending_topics.difference_update(removed)
+        else:
+            device.subscriptions.clear()
+            device.pending_topics.clear()
+        await self._send(
+            device.writer,
+            {
+                "t": "sync_unsubscribed",
+                "id": request_id,
+                "topics": sorted(device.subscriptions),
+                "token": device.token,
+            },
+        )
+
+    def _topic_data(self, device: DeviceSession, topic: str) -> dict[str, object]:
+        if topic == "bridge.status":
+            owner = self._audio_owner()
+            return {
+                "state": self.service_state,
+                "version": AGENT_VERSION,
+                "build": AGENT_BUILD,
+                "api": {"major": AGENT_API_MAJOR, "minor": AGENT_API_MINOR},
+                "protocol": {
+                    "major": device.compatibility.protocol_major,
+                    "minor": device.compatibility.negotiated_minor,
+                },
+                "uptime_ms": max(0, int(time.time() * 1000) - self.started_at_ms),
+                "permissions": {
+                    "accessibility": self.keyboard.check_accessibility(prompt=False),
+                },
+                "audio_output_ready": self.audio.is_running(),
+                "audio_device_id": getattr(self.audio, "device_name", None),
+                "active_microphone_device_id": owner.device_id if owner else None,
+                "issues": self.status_snapshot()["agent"]["issues"],
+            }
+        if topic == "network.status":
+            return {
+                "available": self.network_available,
+                "lan_address": self.lan_address,
+                "tcp_port": self.tcp_port,
+                "udp_port": self.udp_port,
+                "mdns_service": "_cardbridge._tcp",
+            }
+        if topic == "codex.sessions":
+            return self.agents.snapshot(8, acknowledged=device.ack_cursors)
+        if topic == "codex.usage":
+            # Device lines remain capped at 4096 bytes even when the local
+            # App Server has eight sessions with long opaque IDs and full
+            # total/last/delta breakdowns. The owner-only App snapshot keeps
+            # the complete bounded store; device clients receive the newest
+            # four records, which is enough for the live stream and leaves
+            # wire headroom for the authenticated envelope.
+            return self.usage.snapshot(limit=4)
+        return {}
+
+    async def _send_topic(
+        self,
+        device: DeviceSession,
+        topic: str,
+        message_type: str,
+        request_id: object = None,
+    ) -> None:
+        message: dict[str, Any] = {
+            "t": message_type,
+            "topic": topic,
+            "schema": 1,
+            "seq": device.next_topic_sequence(topic),
+            "generated_at_ms": int(time.time() * 1000),
+            "data": self._topic_data(device, topic),
+            "token": device.token,
+        }
+        if request_id is not None:
+            message["id"] = request_id
+        await self._send(device.writer, message)
+
+    async def _flush_topic_subscriptions(self) -> None:
+        timestamp = int(time.time() * 1000)
+        for device in tuple(self.registry.all()):
+            if not device.pending_topics or device.writer.is_closing():
+                continue
+            for topic in tuple(device.pending_topics):
+                if topic not in device.subscriptions:
+                    device.pending_topics.discard(topic)
+                    continue
+                last_sent = device.subscription_last_sent_ms.get(topic, 0)
+                if timestamp - last_sent < device.min_interval_ms:
+                    continue
+                try:
+                    await self._send_topic(device, topic, "sync_update")
+                except (ConnectionError, OSError, ProtocolError):
+                    continue
+                device.subscription_last_sent_ms[topic] = timestamp
+                device.pending_topics.discard(topic)
+
+    async def _handle_audio_claim(self, device: DeviceSession) -> None:
+        if not device.has_capability("audio.lease.v1"):
+            await self._send_capability_error(
+                device.writer, device.token, "audio.lease.v1"
+            )
+            return
+        owner = self._audio_owner()
+        if owner is not None and owner is not device:
+            await self._send(
+                device.writer,
+                {
+                    "t": "audio_lease",
+                    "state": "busy",
+                    "owner_id": owner.device_id,
+                    "token": device.token,
+                },
+            )
+            return
+        self._set_audio_lease(device)
+        await self._send(
+            device.writer,
+            {
+                "t": "audio_lease",
+                "state": "owner",
+                "owner_id": device.device_id,
+                "token": device.token,
+            },
+        )
+
+    async def _handle_audio_release(self, device: DeviceSession) -> None:
+        if not device.has_capability("audio.lease.v1"):
+            await self._send_capability_error(
+                device.writer, device.token, "audio.lease.v1"
+            )
+            return
+        owner = self._audio_owner()
+        if owner is not device:
+            await self._send(
+                device.writer,
+                {
+                    "t": "audio_lease",
+                    "state": "busy" if owner else "available",
+                    "owner_id": owner.device_id if owner else None,
+                    "token": device.token,
+                },
+            )
+            return
+        self._release_audio_lease(device)
+        await self._send(
+            device.writer,
+            {
+                "t": "audio_lease",
+                "state": "released",
+                "owner_id": None,
+                "token": device.token,
+            },
+        )
+
+    def _show_pair_code(self, request: PairingRequest) -> None:
         self.pairing_status = {
-            "device_id": device_id,
-            "code": code,
-            "created_at_ms": int(time.time() * 1000),
+            "device_id": request.device_id,
+            "code": request.code,
+            "created_at_ms": request.created_at_ms,
         }
         self._status_changed()
         # flush + log: stdout is block-buffered when redirected to a file, and
         # the code must be visible wherever the operator is watching.
         print("\n" + "=" * 50, flush=True)
-        print(f"CardBridge pairing code for {device_id}: {code}", flush=True)
-        print("Enter this code on the Cardputer ADV.", flush=True)
+        print(f"CardBridge pairing code for {request.device_id}: {request.code}", flush=True)
+        print("Enter this code on the device.", flush=True)
         print("=" * 50 + "\n", flush=True)
-        LOG.info("pairing code for %s: %s", device_id, code)
+        LOG.info("pairing code for %s: %s", request.device_id, request.code)
         if platform.system() == "Darwin" and not self.dry_run:
-            script = f'display notification "Code: {code}" with title "CardBridge pairing"'
+            script = f'display notification "Code: {request.code}" with title "CardBridge pairing"'
             try:
                 subprocess.run(
                     ["osascript", "-e", script],
@@ -753,20 +1320,36 @@ class BridgeApp:
 
     def receive_audio(self, datagram: bytes, address: tuple[str, int]) -> None:
         peer_ip = str(address[0])
-        for token, (_device_id, active_ip) in tuple(self.active_tokens.items()):
-            if active_ip != peer_ip:
+        # A source IP may host multiple devices. Validate the HMAC against each
+        # token and route the datagram to the matching DeviceSession, never to a
+        # global jitter queue.
+        for device in tuple(self.registry.all()):
+            if device.peer_ip != peer_ip:
                 continue
             try:
-                packet = unpack_audio(token, datagram)
+                packet = unpack_audio(device.token, datagram)
             except ProtocolError:
                 continue
-            self.audio.feed(packet.sequence, packet.payload)
-            for device in self.connected_devices.values():
-                if device.token == token:
-                    device.touch()
-                    device.audio_packets += 1
-                    break
-            if self._record_path is not None:
+            if not device.has_capability("audio.pcm16-16k.v1"):
+                device.audio_invalid_packets += 1
+                return
+            if self.audio_lease_owner_id is None:
+                # Clear any packets cached while this device was previously a
+                # non-owner before selecting it. The current packet is fed
+                # after _set_audio_lease so it becomes the new stream's first
+                # real frame instead of being cleared as stale data.
+                self._set_audio_lease(device)
+            elif self.audio_lease_owner_id != device.device_id:
+                # Non-owner packets are authenticated and counted, but must
+                # not accumulate an old stream that could leak across a later
+                # lease handoff.
+                device.jitter.reset()
+            device.jitter.feed(packet.sequence, packet.payload)
+            device.touch_audio()
+            if self.audio_lease_owner_id == device.device_id:
+                # The output callback already reads this exact session buffer.
+                self.audio.jitter = device.jitter
+            if self.audio_lease_owner_id == device.device_id and self._record_path is not None:
                 self._record_bytes.extend(packet.payload)
             return
         LOG.debug("ignored unauthenticated UDP audio from %s", peer_ip)

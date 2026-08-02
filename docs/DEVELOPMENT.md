@@ -47,6 +47,41 @@ macos/scripts/build_app.sh
 python3 tools/validate_release.py --app macos/dist/CardBridge.app
 ```
 
+## Multi-device and protocol verification
+
+The dependency-free Python suite covers legacy v1, the shipped M5 v2
+capability profile, vendor-neutral devices, concurrent pairing, same-ID
+replacement, per-device keys/acknowledgements, independent UDP jitter buffers,
+the single audio lease, topic capability gates, Token deltas/rates, privacy,
+and the 4096-byte device line limit:
+
+```sh
+PYTHONPATH=bridge:. bridge/.venv/bin/python -m unittest discover -s bridge/tests -v
+swift test --package-path macos
+```
+
+`fake_device.py` can represent a new device without changing the Agent. Its
+default token cache is per device ID, so two instances can run concurrently:
+
+```sh
+PYTHONPATH=bridge:. bridge/.venv/bin/python bridge/fake_device.py \
+  --id waveshare-a --vendor waveshare \
+  --model esp32-s3-touch-amoled-1.75c --name "Desk Orb A"
+PYTHONPATH=bridge:. bridge/.venv/bin/python bridge/fake_device.py \
+  --id waveshare-b --vendor waveshare \
+  --model esp32-s3-touch-amoled-1.75c --name "Desk Orb B"
+```
+
+To exercise the standard topic profile, pass capabilities explicitly (repeat
+`--capability` for each one). Do not use real pairing tokens in shared logs or
+test artifacts. The simulator and test fixtures keep any local cache in the
+ignored development workspace only.
+
+The unmodified M5 binary is represented by the generated
+`FIRMWARE_CAPABILITIES` profile. It should continue using `agent_status`,
+`agent_list`, keyboard, heartbeat, and automatic audio lease acquisition; it
+does not need a firmware update or any new command for this Goal.
+
 ## Generated files
 
 `version.json` is authoritative. After changing it:

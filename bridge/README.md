@@ -1,6 +1,12 @@
 # CardBridge Agent development and diagnostics
 
-The bridge advertises `_cardbridge._tcp` over mDNS, pairs Cardputers with a six-digit code, injects authenticated TCP key events with Quartz, writes authenticated UDP microphone audio into **CardBridge Microphone Feed** (with **BlackHole 2ch** as a compatibility fallback), and publishes a privacy-trimmed view of local Codex sessions. Normal users run the bundled Agent through `CardBridge.app`; the Python commands below are for development and diagnostics.
+The bridge advertises `_cardbridge._tcp` over mDNS, pairs multiple vendor-neutral
+devices with isolated six-digit challenges, injects authenticated TCP key events
+with Quartz, writes the single active authenticated UDP microphone stream into
+**CardBridge Microphone Feed** (with **BlackHole 2ch** as a compatibility
+fallback), and publishes privacy-trimmed local Codex sessions and Token usage.
+Normal users run the bundled Agent through `CardBridge.app`; the Python commands
+below are for development and diagnostics.
 
 ## 1. Install CardBridge Microphone and configure Typeless
 
@@ -95,7 +101,7 @@ The socket directory uses mode `0700`, the socket uses `0600`, and the server al
 {"t":"hello","api":{"major":1,"minor":0}}
 ```
 
-It may then request `snapshot_req`, send `subscribe` for live snapshots, or use a `command` named `set_gain`, `unpair`, `install_hooks`, `uninstall_hooks`, `restart`, or `shutdown`. Snapshots expose service, device, audio, Accessibility, and Codex health but never expose pairing tokens. Use `--no-control-socket` to disable this endpoint or `--control-socket PATH` to override it.
+It may then request `snapshot_req`, send `subscribe` for live snapshots, or use a `command` named `set_gain`, `unpair`, `install_hooks`, `uninstall_hooks`, `restart`, or `shutdown`. Snapshots expose service, all online devices, all pending pairings, per-device capabilities/subscriptions/audio lease, audio/Codex health, and explicit Token availability, but never expose pairing tokens. Use `--no-control-socket` to disable this endpoint or `--control-socket PATH` to override it.
 
 ## 7. End-to-end simulator
 
@@ -130,6 +136,30 @@ From the repository root, also verify that every generated version constant matc
 python3 tools/generate_versions.py --check
 ```
 
+## Multi-device protocol behavior
+
+`DeviceRegistry` owns one `DeviceSession` per authenticated connection. Device
+ID, vendor, and model are descriptive rather than an allowlist. A second
+authenticated connection with the same ID atomically replaces the first and
+cleans its held keys, subscriptions, acknowledgement cursor, jitter buffer,
+and audio lease. Pairing requests are keyed by connection, so concurrent codes
+and failure counters remain independent.
+
+The Agent negotiates protocol `2.1` and only enables a capability declared by
+the device. `sync_req`/`sync_subscribe` use bounded per-topic snapshots for
+`bridge.status`, `network.status`, `codex.sessions`, and `codex.usage`; the
+requested interval is clamped to 250–60000 ms. Device Token updates contain the
+newest four sessions so the authenticated JSON line remains at most 4096 bytes.
+Legacy v1 and the shipped M5 capability profile receive no new `sync_*`, Token,
+or lease messages.
+
+Audio is not mixed. Every session has a separate jitter buffer. The first
+valid packet automatically owns the one public microphone lease, so the old M5
+continues to work without a new command. Devices with `audio.lease.v1` can
+explicitly claim or release; non-owners are authenticated and counted but do
+not reach the HAL feed. Lease handoff resets the output boundary, and 3 seconds
+without valid owner audio releases it.
+
 ## Protocol and recovery behavior
 
 - TCP `7788`: newline-delimited UTF-8 JSON capped at 4096 bytes, five-second ping/pong, disconnect after three misses. Agent snapshots budget titles to 32 characters, project names to 20 characters, and public activity to 72 UTF-8 bytes so all eight worst-case CJK sessions still fit. The hello negotiates device protocol major/minor and the capability intersection. Missing fields are accepted as legacy v1; an unsupported major receives `upgrade_required`. Every post-handshake message carries the session token; unknown authenticated message types are ignored for forward compatibility.
@@ -137,4 +167,7 @@ python3 tools/generate_versions.py --check
 - Local Unix socket: Agent API v1 newline-delimited JSON for status subscriptions and menu bar commands, limited to the logged-in user.
 - Playback starts at a configurable 100 ms jitter depth. Missing sequences become silence; packets are not retransmitted.
 - Firmware stops microphone capture and UDP sending whenever muted or disconnected. Reconnect uses exponential backoff capped at 30 seconds.
-- A Cardputer maintains exactly one selected Mac control connection, so key and microphone data are never broadcast.
+- Each device maintains its own selected Mac control connection. The Agent
+  routes authenticated key/audio traffic by session, so devices are not
+  broadcast to one another and an old M5 can continue using the original wire
+  messages.

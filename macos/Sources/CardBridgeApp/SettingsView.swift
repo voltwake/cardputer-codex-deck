@@ -40,7 +40,7 @@ struct SettingsView: View {
                         }
                     }
                 }
-                Text("请在列表中允许 Codex Deck；该权限只用于把 M5 按键发送到 Mac。")
+                Text("请在列表中允许 Codex Deck；该权限只用于把设备按键发送到 Mac。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -102,6 +102,41 @@ struct SettingsView: View {
                 LabeledContent("App Server") {
                     Text(client.snapshot.codex.connected ? L10n.text("已连接") : L10n.text("未连接"))
                 }
+                LabeledContent("Token 统计") {
+                    if let usage = client.snapshot.codex.usage, usage.available {
+                        Text(L10n.format("%@ 个会话", String(usage.sessions.count)))
+                    } else {
+                        Text(L10n.text("不可用/未知"))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let usage = client.snapshot.codex.usage, usage.available,
+                   let latest = usage.sessions.first {
+                    LabeledContent("累计总量") {
+                        Text(latest.total.total.formatted(.number))
+                            .monospacedDigit()
+                    }
+                    LabeledContent("输入") {
+                        Text(latest.total.input.formatted(.number))
+                            .monospacedDigit()
+                    }
+                    LabeledContent("缓存输入") {
+                        Text(latest.total.cachedInput.formatted(.number))
+                            .monospacedDigit()
+                    }
+                    LabeledContent("输出") {
+                        Text(latest.total.output.formatted(.number))
+                            .monospacedDigit()
+                    }
+                    LabeledContent("推理输出") {
+                        Text(latest.total.reasoningOutput.formatted(.number))
+                            .monospacedDigit()
+                    }
+                    LabeledContent("最近速率") {
+                        Text("\(latest.tokensPerSecond.formatted(.number.precision(.fractionLength(1)))) tok/s")
+                            .monospacedDigit()
+                    }
+                }
                 LabeledContent("任务 Hooks") {
                     HStack {
                         Text(
@@ -130,9 +165,22 @@ struct SettingsView: View {
             Section("版本") {
                 LabeledContent("Codex Deck App", value: "\(GeneratedVersion.app) (\(GeneratedVersion.appBuild))")
                 LabeledContent("Bridge Agent", value: "\(client.snapshot.agent.version) (\(client.snapshot.agent.build))")
-                if let device = client.snapshot.devices.first {
-                    LabeledContent("M5 固件", value: "\(device.firmware) (\(device.firmwareBuild))")
-                    LabeledContent("设备协议", value: "\(device.protocol.major).\(device.protocol.minor)")
+                if client.snapshot.devices.isEmpty {
+                    Text("没有在线设备")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(client.snapshot.devices) { device in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(device.name ?? device.model)
+                                .font(.subheadline.weight(.medium))
+                            Text(
+                                "\(device.firmware) (\(device.firmwareBuild)) · "
+                                    + "\(device.protocol.major).\(device.protocol.minor)"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 Toggle("自动检查更新", isOn: $automaticUpdates)
                     .onChange(of: automaticUpdates) { enabled in
@@ -157,6 +205,17 @@ struct SettingsView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
+                            Text(
+                                client.snapshot.devices.contains(where: { $0.id == device.id })
+                                    ? L10n.text("在线")
+                                    : L10n.text("离线")
+                            )
+                            .font(.caption)
+                            .foregroundStyle(
+                                client.snapshot.devices.contains(where: { $0.id == device.id })
+                                    ? .green
+                                    : .secondary
+                            )
                             Button("取消配对", role: .destructive) {
                                 client.unpair(deviceID: device.id)
                             }

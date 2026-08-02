@@ -9,7 +9,7 @@ namespace cardbridge {
 inline constexpr char kFirmwareVersion[] = "0.3.0";
 inline constexpr uint32_t kFirmwareBuild = 8;
 inline constexpr uint8_t kDeviceProtocolMajor = 2;
-inline constexpr uint8_t kDeviceProtocolMinor = 0;
+inline constexpr uint8_t kDeviceProtocolMinor = 1;
 inline constexpr bool kSupportLegacyProtocol1 = true;
 inline constexpr const char* kDeviceCapabilities[] = {
     "control.keys.v1",

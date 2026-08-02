@@ -31,18 +31,7 @@ enum DiagnosticExporter {
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
-            let report = Report(
-                generatedAt: Date(),
-                appVersion: GeneratedVersion.app,
-                appBuild: GeneratedVersion.appBuild,
-                operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
-                architecture: architecture,
-                snapshot: snapshot
-            )
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(report).write(
+            try encodedReport(snapshot: snapshot).write(
                 to: directory.appendingPathComponent("status.json"),
                 options: .atomic
             )
@@ -55,6 +44,21 @@ enum DiagnosticExporter {
             try? fileManager.removeItem(at: directory)
             return L10n.format("导出失败：%@", error.localizedDescription)
         }
+    }
+
+    static func encodedReport(snapshot: BridgeSnapshot) throws -> Data {
+        let report = Report(
+            generatedAt: Date(),
+            appVersion: GeneratedVersion.app,
+            appBuild: GeneratedVersion.appBuild,
+            operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
+            architecture: architecture,
+            snapshot: snapshot.diagnosticsSnapshot
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(report)
     }
 
     private static func exportLogs(to directory: URL) throws {

@@ -7,6 +7,21 @@ from cardbridge.protocol import MAX_JSON_LINE, encode_message
 
 
 class AgentStoreTests(unittest.TestCase):
+    def test_device_ack_does_not_hide_an_active_session(self) -> None:
+        session = AgentSession(
+            id="active-session",
+            status="running",
+            phase="tool",
+            activity="Running a command",
+            updated_ms=123,
+        )
+
+        snapshot = session.as_dict(acknowledged_at_ms=123)
+
+        self.assertEqual(snapshot["status"], "running")
+        self.assertEqual(snapshot["phase"], "tool")
+        self.assertEqual(snapshot["activity"], "Running a command")
+
     def test_focus_follows_latest_user_prompt_and_ack_clears_ready(self) -> None:
         store = AgentStore()
         store.update_threads(

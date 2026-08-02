@@ -6,17 +6,32 @@ APP_BUILD = 9
 AGENT_VERSION = "1.1.0"
 AGENT_BUILD = 9
 AGENT_API_MAJOR = 1
-AGENT_API_MINOR = 0
+AGENT_API_MINOR = 1
 FIRMWARE_VERSION = "0.3.0"
 MIN_FIRMWARE_VERSION = "0.1.0"
 DEVICE_PROTOCOL_MAJOR = 2
-DEVICE_PROTOCOL_MINOR = 0
+DEVICE_PROTOCOL_MINOR = 1
 CONFIG_SCHEMA = 2
 SUPPORT_LEGACY_PROTOCOL_1 = True
-CAPABILITIES = (
+AGENT_CAPABILITIES = (
+    "control.keys.v1",
+    "audio.pcm16-16k.v1",
+    "agents.snapshot.v1",
+    "agents.phase.v1",
+    "quota.v1",
+    "sync.subscribe.v1",
+    "bridge.status.v1",
+    "network.status.v1",
+    "usage.tokens.v1",
+    "usage.tokens.stream.v1",
+    "audio.lease.v1",
+)
+FIRMWARE_CAPABILITIES = (
     "control.keys.v1",
     "audio.pcm16-16k.v1",
     "agents.snapshot.v1",
     "agents.phase.v1",
     "quota.v1",
 )
+# Compatibility alias for callers that mean the server-side capability profile.
+CAPABILITIES = AGENT_CAPABILITIES

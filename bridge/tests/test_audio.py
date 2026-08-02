@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import struct
 import sys
+import threading
 import types
 import unittest
 from unittest.mock import patch
+
+import numpy
 
 from cardbridge.audio import (
     BLACKHOLE_DEVICE,
@@ -143,6 +146,71 @@ class AudioOutputSelectionTests(unittest.TestCase):
         self.assertEqual(len(streams), 2)
         self.assertTrue(first.closed)
         self.assertTrue(output.is_running())
+
+    def test_reset_stream_clears_resampler_boundary_and_jitter(self) -> None:
+        output = BlackHoleAudioOutput()
+        output._source.extend([0.25, -0.25])
+        output._phase = 0.75
+        output.jitter.feed(10, frame(99))
+
+        output.reset_stream()
+
+        self.assertEqual(output._source, [])
+        self.assertEqual(output._phase, 0.0)
+        self.assertEqual(output.jitter.read_samples(320), [0] * 320)
+
+    def test_reset_stream_waits_for_an_active_audio_callback(self) -> None:
+        callback_entered = threading.Event()
+        release_callback = threading.Event()
+        reset_started = threading.Event()
+        reset_finished = threading.Event()
+
+        class BlockingJitter:
+            reset_called = False
+
+            def read_samples(self, count: int) -> list[int]:
+                callback_entered.set()
+                self.assert_released()
+                return [1024] * count
+
+            def assert_released(self) -> None:
+                if not release_callback.wait(1):
+                    raise AssertionError("audio callback was not released")
+
+            def reset(self) -> None:
+                self.reset_called = True
+
+        output = BlackHoleAudioOutput(gain=1.0)
+        output._numpy = numpy
+        output.jitter = BlockingJitter()  # type: ignore[assignment]
+        outdata = numpy.zeros((64, 2), dtype=numpy.float32)
+
+        callback_thread = threading.Thread(
+            target=output._callback,
+            args=(outdata, 64, None, None),
+        )
+
+        def reset() -> None:
+            reset_started.set()
+            output.reset_stream()
+            reset_finished.set()
+
+        callback_thread.start()
+        self.assertTrue(callback_entered.wait(1))
+        reset_thread = threading.Thread(target=reset)
+        reset_thread.start()
+        self.assertTrue(reset_started.wait(1))
+        self.assertFalse(reset_finished.wait(0.05))
+        release_callback.set()
+        callback_thread.join(1)
+        reset_thread.join(1)
+
+        self.assertFalse(callback_thread.is_alive())
+        self.assertFalse(reset_thread.is_alive())
+        self.assertTrue(output.jitter.reset_called)
+        self.assertEqual(output.callback_errors, 0)
+        self.assertEqual(output._source, [])
+        self.assertEqual(output._phase, 0.0)
 
 
 if __name__ == "__main__":

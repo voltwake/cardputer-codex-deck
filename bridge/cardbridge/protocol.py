@@ -13,6 +13,25 @@ AUDIO_PAYLOAD_SIZE = AUDIO_SAMPLES_PER_FRAME * 2
 AUDIO_HEADER = struct.Struct("!II8s")
 AUDIO_PACKET_SIZE = AUDIO_HEADER.size + AUDIO_PAYLOAD_SIZE
 MAX_JSON_LINE = 4096
+MIN_SUBSCRIPTION_INTERVAL_MS = 250
+MAX_SUBSCRIPTION_INTERVAL_MS = 60_000
+MAX_USAGE_STREAM_HZ = 4
+
+# Topic capability requirements are deliberately data-driven. The Agent may
+# support a topic globally, but a device only receives it after the capability
+# was negotiated in its own hello.
+TOPIC_READ_CAPABILITY = {
+    "bridge.status": "bridge.status.v1",
+    "network.status": "network.status.v1",
+    "codex.sessions": "agents.snapshot.v1",
+    "codex.usage": "usage.tokens.v1",
+}
+TOPIC_SUBSCRIPTION_CAPABILITIES = {
+    "bridge.status": ("sync.subscribe.v1",),
+    "network.status": ("sync.subscribe.v1",),
+    "codex.sessions": ("sync.subscribe.v1",),
+    "codex.usage": ("sync.subscribe.v1", "usage.tokens.stream.v1"),
+}
 
 
 class ProtocolError(ValueError):

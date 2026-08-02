@@ -116,6 +116,11 @@ class NullAudioOutput:
     def feed(self, sequence: int, payload: bytes) -> None:
         self.jitter.feed(sequence, payload)
 
+    def reset_stream(self) -> None:
+        """Drop all buffered samples at an ownership/output boundary."""
+
+        self.jitter.reset()
+
 
 class BlackHoleAudioOutput(NullAudioOutput):
     def __init__(
@@ -135,6 +140,7 @@ class BlackHoleAudioOutput(NullAudioOutput):
         self._numpy: Any = None
         self._source: list[float] = []
         self._phase = 0.0
+        self._resampler_lock = threading.Lock()
         self.output_rate = 48_000.0
         self.callback_errors = 0
         self.callback_statuses = 0
@@ -219,9 +225,18 @@ class BlackHoleAudioOutput(NullAudioOutput):
                 stream.close()
             except Exception:
                 pass
-        self._source.clear()
-        self._phase = 0.0
-        self.jitter.reset()
+        self.reset_stream()
+
+    def reset_stream(self) -> None:
+        """Reset both the input jitter buffer and the resampler boundary."""
+
+        # PortAudio invokes _callback on its own thread while lease changes
+        # run on the asyncio thread. Keep a reset from clearing the interpolation
+        # source halfway through a callback and permanently stopping the stream.
+        with self._resampler_lock:
+            self._source.clear()
+            self._phase = 0.0
+            super().reset_stream()
 
     def is_running(self) -> bool:
         if self._stream is None or self._callback_failed:
@@ -239,25 +254,26 @@ class BlackHoleAudioOutput(NullAudioOutput):
         if status:
             self.callback_statuses += 1
         try:
-            np = self._numpy
-            step = AUDIO_SAMPLE_RATE / self.output_rate
-            positions = self._phase + np.arange(frames, dtype=np.float64) * step
-            required = int(positions[-1]) + 2 if frames else 2
-            if len(self._source) < required:
-                samples = self.jitter.read_samples(required - len(self._source))
-                self._source.extend(sample / 32768.0 for sample in samples)
-            mono = np.interp(positions, np.arange(len(self._source)), self._source).astype(np.float32)
-            if self.gain != 1.0:
-                # tanh soft-clip: loud syllables compress instead of hard-clipping,
-                # which would smear the waveform STT depends on.
-                mono = np.tanh(mono * self.gain).astype(np.float32)
-            outdata[:, 0] = mono
-            outdata[:, 1] = mono
-            next_position = self._phase + frames * step
-            consumed = int(next_position)
-            if consumed:
-                del self._source[:consumed]
-            self._phase = next_position - consumed
+            with self._resampler_lock:
+                np = self._numpy
+                step = AUDIO_SAMPLE_RATE / self.output_rate
+                positions = self._phase + np.arange(frames, dtype=np.float64) * step
+                required = int(positions[-1]) + 2 if frames else 2
+                if len(self._source) < required:
+                    samples = self.jitter.read_samples(required - len(self._source))
+                    self._source.extend(sample / 32768.0 for sample in samples)
+                mono = np.interp(positions, np.arange(len(self._source)), self._source).astype(np.float32)
+                if self.gain != 1.0:
+                    # tanh soft-clip: loud syllables compress instead of hard-clipping,
+                    # which would smear the waveform STT depends on.
+                    mono = np.tanh(mono * self.gain).astype(np.float32)
+                outdata[:, 0] = mono
+                outdata[:, 1] = mono
+                next_position = self._phase + frames * step
+                consumed = int(next_position)
+                if consumed:
+                    del self._source[:consumed]
+                self._phase = next_position - consumed
         except Exception:
             # PortAudio stops invoking a callback that raises. Fail silent and
             # let the bridge watchdog recreate the stream on its next check.

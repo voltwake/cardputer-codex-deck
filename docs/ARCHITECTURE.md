@@ -1,19 +1,23 @@
 # Current architecture
 
 ```text
-Cardputer ADV firmware (ESP32-S3)
+旧 M5 固件 / 标准 ESP32 设备（多个并行连接）
   ├─ mDNS discovery: _cardbridge._tcp
   ├─ TCP 7788: authenticated JSON key/control protocol
   └─ UDP 7789: authenticated 16 kHz PCM16 audio frames
-                 │ local network
-                 ▼
+                    │ local network
+                    ▼
 Codex Deck (`CardBridge.app`, SwiftUI menu bar process)
   └─ supervised CardBridgeAgent (bundled Python runtime)
-       ├─ Bonjour discovery and pairing
-       ├─ Quartz keyboard injection
-       ├─ audio jitter buffer → CardBridge Microphone Feed
-       ├─ local owner-only Unix control socket
-       └─ read-only Codex session/status integration
+       ├─ DeviceRegistry → one DeviceSession per authenticated connection
+       │    ├─ pairing/auth, negotiated capabilities, subscriptions
+       │    ├─ held keys and per-device acknowledgement cursor
+       │    └─ independent audio jitter buffer and counters
+       ├─ capability-gated sync topics → each subscribed device
+       ├─ global key ownership → Quartz keyboard injection
+       ├─ one AudioLease → selected session jitter buffer → Microphone Feed
+       ├─ TokenUsageStore ← Codex App Server notifications
+       └─ local owner-only Unix control socket → multi-device App UI
 ```
 
 The user-facing `CardBridge Microphone` is an input-only Core Audio HAL device.
@@ -21,8 +25,42 @@ The Agent writes to its paired output-only Feed device. BlackHole 2ch remains a
 compatibility fallback when the bundled driver is absent.
 
 The App owns lifecycle, permission requests, login launch, updates, and
-diagnostics. The Agent owns network/audio/device behavior. Pairing secrets are
-kept outside ordinary status snapshots and logs.
+diagnostics. The Agent owns network/audio/device behavior. `version.json`
+generates an Agent capability profile separately from the Cardputer firmware
+profile, so adding a server feature cannot make an unmodified M5 claim support
+for it. Pairing secrets are kept outside ordinary status snapshots and logs.
+
+## Multi-device state boundaries
+
+`DeviceRegistry` is the only online-device source of truth. A stable device ID
+may have only one active session: a newly authenticated session atomically
+replaces the previous one, releases its keys and audio lease, and clears its
+subscriptions. Pairing challenges are keyed by connection, so simultaneous
+six-digit codes and failure counters cannot overwrite one another.
+
+Keyboard state is global only at the final injection boundary. Each session
+tracks its own held keys; a physical key-down is injected once and the final
+holder's release injects the key-up. Disconnect, unpair, and replacement clean
+only the affected session.
+
+Audio is deliberately not mixed. Every session receives authenticated UDP
+packets into its own jitter buffer and increments its own counters. The first
+valid stream obtains the single `CardBridge Microphone` lease automatically,
+which keeps old M5 firmware working. Devices advertising `audio.lease.v1` can
+explicitly claim/release; non-owners are counted but never sent to the HAL
+feed. Lease changes reset the output boundary.
+
+The standard `sync_*` topics are separate bounded snapshots. A device receives
+only topics whose read/subscription capabilities it declared during hello, and
+updates are merged and rate-limited per session. Legacy v1 and current M5
+capability profiles do not receive new sync, Token, or lease messages.
+
+Token usage is sourced only from `thread/tokenUsage/updated`. The store keeps
+per-thread cumulative/last/delta/rate values, rejects stale out-of-order
+notifications, and establishes a zero-delta baseline after a reset or new
+turn. Device usage topics send the newest four records to leave room under the
+4096-byte device line limit; the owner-only App snapshot retains the store's
+bounded eight-session view.
 
 ## Trust boundaries
 
