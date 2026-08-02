@@ -37,7 +37,7 @@
     <key>SUEnableAutomaticChecks</key>
     <true/>
     <key>SUFeedURL</key>
-    <string>https://raw.githubusercontent.com/voltwake/cardputer-codex-deck/main/release/appcast.xml</string>
+    <string>https://raw.githubusercontent.com/voltwake/codex-deck/main/release/appcast.xml</string>
     <key>SUPublicEDKey</key>
     <string>d3fvdw4bGTCUoKuACWMwrQ2ZAF6VgyvaPBdw+U5iwkQ=</string>
     <key>SUScheduledCheckInterval</key>

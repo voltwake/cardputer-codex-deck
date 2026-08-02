@@ -7,7 +7,7 @@ install_dir=/Library/Audio/Plug-Ins/HAL
 installed_bundle=${install_dir}/CardBridgeMicrophone.driver
 
 if [[ ! -d "${source_bundle}" ]]; then
-  echo "Driver is not built. Run driver/build_driver.sh first." >&2
+  echo "Driver is not built. Run bridge/driver/build_driver.sh first." >&2
   exit 1
 fi
 

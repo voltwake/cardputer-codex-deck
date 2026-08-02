@@ -9,7 +9,7 @@ App ZIP、面向用户的 DMG、固件 BIN、兼容性清单、第三方声明�
 本机候选构建：
 
 ```sh
-CODE_SIGN_IDENTITY="Apple Development: …" macos/scripts/release.sh
+CODE_SIGN_IDENTITY="Apple Development: …" bridge/macos/scripts/release.sh
 ```
 
 公开发布必须使用 `Developer ID Application`，并先把 Notary 凭据保存到 Keychain：
@@ -19,10 +19,11 @@ xcrun notarytool store-credentials cardbridge-notary
 REQUIRE_NOTARIZATION=1 \
 NOTARY_PROFILE=cardbridge-notary \
 CODE_SIGN_IDENTITY="Developer ID Application: …" \
-macos/scripts/release.sh
+bridge/macos/scripts/release.sh
 ```
 
 Sparkle 私钥只保存在本机 Keychain，账户名固定为 `com.voltwake.cardbridge`；仓库仅保存公钥。
 
-发布前还必须审阅根目录 `THIRD_PARTY_NOTICES.md`、`assets/ASSET_SOURCES.md`
+发布前还必须审阅根目录 `THIRD_PARTY_NOTICES.md`、
+`firmware/m5stack-cardputer-adv/assets/ASSET_SOURCES.md`
 和 `SECURITY.md`，并确认 GitHub Release 中的所有文件都出现在校验清单中。

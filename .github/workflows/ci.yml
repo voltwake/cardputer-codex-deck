@@ -22,16 +22,16 @@ jobs:
       - name: Check patches and syntax
         run: |
           git diff --check
-          PYTHONPATH=bridge:. bridge/.venv/bin/python -m compileall -q bridge tools
+          PYTHONPATH=bridge/agent:. bridge/agent/.venv/bin/python -m compileall -q bridge/agent tools
       - name: Secret scan
         run: ./scripts/security-scan.sh
       - name: Python tests
-        run: PYTHONPATH=bridge:. bridge/.venv/bin/python -m unittest discover -s bridge/tests -v
+        run: PYTHONPATH=bridge/agent:. bridge/agent/.venv/bin/python -m unittest discover -s bridge/agent/tests -v
       - name: Swift tests
-        run: swift test --package-path macos
+        run: swift test --package-path bridge/macos
       - name: Firmware build
-        run: tools/.venv/bin/pio run
+        run: tools/.venv/bin/pio run -d firmware/m5stack-cardputer-adv
       - name: Package app and Agent
-        run: macos/scripts/build_app.sh
+        run: bridge/macos/scripts/build_app.sh
       - name: Validate package
-        run: python3 tools/validate_release.py --app macos/dist/CardBridge.app
+        run: python3 tools/validate_release.py --app bridge/macos/dist/CardBridge.app

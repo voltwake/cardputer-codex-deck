@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir=${0:A:h}
 root_dir=${script_dir:h}
-repo_slug=${CARDBRIDGE_REPOSITORY:-voltwake/cardputer-codex-deck}
+repo_slug=${CARDBRIDGE_REPOSITORY:-voltwake/codex-deck}
 version=latest
 open_app=1
 

@@ -20,7 +20,7 @@ Check the machine without changing it:
 ./scripts/bootstrap.sh
 ```
 
-This creates the isolated `bridge/.venv` for the packaged Agent and
+This creates the isolated `bridge/agent/.venv` for the packaged Agent and
 `tools/.venv` for PlatformIO. Keeping build tools out of the Agent environment
 prevents unrelated packages from being bundled into the App. Generated version
 files are checked but never silently rewritten during a build.
@@ -35,16 +35,16 @@ files are checked but never silently rewritten during a build.
 The test script runs generated-version validation, Python tests, Swift tests,
 and a firmware build when PlatformIO is available. The build script packages
 the signed App, embedded Agent, Sparkle framework, and microphone driver under
-`macos/dist/CardBridge.app`.
+`bridge/macos/dist/CardBridge.app`.
 
 The lower-level commands remain available:
 
 ```sh
-PYTHONPATH=bridge:. bridge/.venv/bin/python -m unittest discover -s bridge/tests -v
-swift test --package-path macos
-pio run
-macos/scripts/build_app.sh
-python3 tools/validate_release.py --app macos/dist/CardBridge.app
+PYTHONPATH=bridge/agent:. bridge/agent/.venv/bin/python -m unittest discover -s bridge/agent/tests -v
+swift test --package-path bridge/macos
+pio run -d firmware/m5stack-cardputer-adv
+bridge/macos/scripts/build_app.sh
+python3 tools/validate_release.py --app bridge/macos/dist/CardBridge.app
 ```
 
 ## Multi-device and protocol verification
@@ -56,18 +56,18 @@ the single audio lease, topic capability gates, Token deltas/rates, privacy,
 and the 4096-byte device line limit:
 
 ```sh
-PYTHONPATH=bridge:. bridge/.venv/bin/python -m unittest discover -s bridge/tests -v
-swift test --package-path macos
+PYTHONPATH=bridge/agent:. bridge/agent/.venv/bin/python -m unittest discover -s bridge/agent/tests -v
+swift test --package-path bridge/macos
 ```
 
 `fake_device.py` can represent a new device without changing the Agent. Its
 default token cache is per device ID, so two instances can run concurrently:
 
 ```sh
-PYTHONPATH=bridge:. bridge/.venv/bin/python bridge/fake_device.py \
+PYTHONPATH=bridge/agent:. bridge/agent/.venv/bin/python bridge/agent/fake_device.py \
   --id waveshare-a --vendor waveshare \
   --model esp32-s3-touch-amoled-1.75c --name "Desk Orb A"
-PYTHONPATH=bridge:. bridge/.venv/bin/python bridge/fake_device.py \
+PYTHONPATH=bridge/agent:. bridge/agent/.venv/bin/python bridge/agent/fake_device.py \
   --id waveshare-b --vendor waveshare \
   --model esp32-s3-touch-amoled-1.75c --name "Desk Orb B"
 ```
@@ -91,8 +91,9 @@ python3 tools/generate_versions.py
 python3 tools/generate_versions.py --check
 ```
 
-Do not hand-edit `bridge/cardbridge/_generated_version.py`,
-`src/generated_version.h`, `macos/Shared/GeneratedVersion.swift`, or
+Do not hand-edit `bridge/agent/cardbridge/_generated_version.py`,
+`firmware/m5stack-cardputer-adv/src/generated_version.h`,
+`bridge/macos/Shared/GeneratedVersion.swift`, or
 `release/compatibility.json`.
 
 ## Release build
@@ -103,9 +104,10 @@ The release gate is:
 CODE_SIGN_IDENTITY="Developer ID Application: …" \
   REQUIRE_NOTARIZATION=1 \
   NOTARY_PROFILE=cardbridge-notary \
-  macos/scripts/release.sh
+  bridge/macos/scripts/release.sh
 ```
 
 Public distribution requires a Developer ID certificate, notarization
 credentials, a Sparkle signing key, a tag matching `version.json`, and a
-review of `THIRD_PARTY_NOTICES.md` and `assets/ASSET_SOURCES.md`.
+review of `THIRD_PARTY_NOTICES.md` and
+`firmware/m5stack-cardputer-adv/assets/ASSET_SOURCES.md`.

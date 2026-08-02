@@ -19,7 +19,8 @@ python3 tools/generate_versions.py
 python3 tools/generate_versions.py --check
 ```
 
-Keep firmware dependencies pinned in `platformio.ini`. Do not add PSRAM
+Keep M5 firmware dependencies pinned in
+`firmware/m5stack-cardputer-adv/platformio.ini`. Do not add PSRAM
 configuration: Cardputer ADV uses an ESP32-S3 without PSRAM.
 
 ## Change boundaries

@@ -14,14 +14,14 @@ if ! "${python_bin}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (
   exit 1
 fi
 
-PYTHON_BIN="${python_bin}" "${root_dir}/macos/scripts/bootstrap_build_env.sh"
+PYTHON_BIN="${python_bin}" "${root_dir}/bridge/macos/scripts/bootstrap_build_env.sh"
 tool_venv="${root_dir}/tools/.venv"
 if [[ ! -x "${tool_venv}/bin/python" ]]; then
   "${python_bin}" -m venv "${tool_venv}"
 fi
 "${tool_venv}/bin/python" -m pip install --disable-pip-version-check \
   "platformio==6.1.19"
-"${root_dir}/macos/scripts/bootstrap_sparkle.sh"
+"${root_dir}/bridge/macos/scripts/bootstrap_sparkle.sh"
 
 print "CardBridge development environment is ready."
 print "Next: ${root_dir}/scripts/test.sh"

@@ -2,7 +2,7 @@
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
     <title>CardBridge Updates</title>
-    <link>https://github.com/voltwake/cardputer-codex-deck</link>
+    <link>https://github.com/voltwake/codex-deck</link>
     <description>CardBridge stable update feed</description>
     <language>zh-cn</language>
   </channel>

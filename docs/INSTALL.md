@@ -48,7 +48,7 @@ or a terminal.
 From a clean checkout:
 
 ```sh
-cd /path/to/cardputer-codex-deck
+cd /path/to/codex-deck
 ./scripts/doctor.sh
 ./scripts/bootstrap.sh
 ./scripts/test.sh
@@ -60,7 +60,7 @@ cd /path/to/cardputer-codex-deck
 The source path requires macOS 13+, Apple Silicon, Xcode/Command Line Tools,
 Python 3.10+, PlatformIO, network access for pinned dependencies, and a
 working Apple development or ad-hoc signing setup. `bootstrap.sh` creates the
-private `bridge/.venv`; it does not modify a system Python installation.
+private `bridge/agent/.venv`; it does not modify a system Python installation.
 
 ## Firmware
 
@@ -68,8 +68,8 @@ The release includes a prebuilt firmware `.bin`. For a source build, connect a
 Cardputer ADV and run:
 
 ```sh
-pio run
-pio run -t upload
+pio run -d firmware/m5stack-cardputer-adv
+pio run -d firmware/m5stack-cardputer-adv -t upload
 ```
 
 Let PlatformIO auto-detect `/dev/cu.usbmodem*`. The port can change after a

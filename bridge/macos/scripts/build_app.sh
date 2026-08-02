@@ -3,7 +3,9 @@ set -euo pipefail
 
 script_dir=${0:A:h}
 macos_dir=${script_dir:h}
-repo_dir=${macos_dir:h}
+repo_dir=${macos_dir:h:h}
+agent_dir=${repo_dir}/bridge/agent
+driver_dir=${repo_dir}/bridge/driver
 configuration=${CONFIGURATION:-release}
 app_dir=${macos_dir}/dist/CardBridge.app
 contents_dir=${app_dir}/Contents
@@ -27,14 +29,14 @@ export CODE_SIGN_IDENTITY=${identity}
 "${macos_dir}/scripts/bootstrap_sparkle.sh"
 "${macos_dir}/scripts/bootstrap_build_env.sh"
 "${macos_dir}/scripts/build_icon.sh"
-"${repo_dir}/driver/build_driver.sh"
+"${driver_dir}/build_driver.sh"
 python3 "${repo_dir}/tools/generate_versions.py" --check
-"${repo_dir}/bridge/.venv/bin/pyinstaller" \
+"${agent_dir}/.venv/bin/python" -m PyInstaller \
   --noconfirm \
   --clean \
   --distpath "${macos_dir}/.build/agent-dist" \
   --workpath "${macos_dir}/.build/pyinstaller" \
-  "${repo_dir}/bridge/packaging/CardBridgeAgent.spec"
+  "${agent_dir}/packaging/CardBridgeAgent.spec"
 swift build --package-path "${macos_dir}" -c "${configuration}"
 bin_dir=$(swift build --package-path "${macos_dir}" -c "${configuration}" --show-bin-path)
 
@@ -49,10 +51,10 @@ ditto "${bin_dir}/Sparkle.framework" "${contents_dir}/Frameworks/Sparkle.framewo
 ditto "${macos_dir}/App/Info.plist" "${contents_dir}/Info.plist"
 ditto "${macos_dir}/App/Resources" "${contents_dir}/Resources"
 ditto "${macos_dir}/App/CardBridge.icns" "${contents_dir}/Resources/CardBridge.icns"
-"${repo_dir}/bridge/.venv/bin/python" "${repo_dir}/tools/collect_licenses.py" \
+"${agent_dir}/.venv/bin/python" "${repo_dir}/tools/collect_licenses.py" \
   --output "${contents_dir}/Resources/Licenses"
 mkdir -p "${contents_dir}/Resources/AudioDriver"
-ditto "${repo_dir}/driver/build/CardBridgeMicrophone.driver" \
+ditto "${driver_dir}/build/CardBridgeMicrophone.driver" \
   "${contents_dir}/Resources/AudioDriver/CardBridgeMicrophone.driver"
 ditto "${macos_dir}/.build/agent-dist/CardBridgeAgent.app" "${agent_app}"
 ditto "${macos_dir}/App/Agent-Info.plist" "${agent_contents}/Info.plist"

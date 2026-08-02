@@ -143,7 +143,15 @@ def main() -> int:
         "installed" if driver.exists() else "not installed; App will offer installation",
     )
 
-    required = ["README.md", "AGENTS.md", "LICENSE", "docs/INSTALL.md", "platformio.ini"]
+    required = [
+        "README.md",
+        "AGENTS.md",
+        "LICENSE",
+        "docs/INSTALL.md",
+        "firmware/m5stack-cardputer-adv/platformio.ini",
+        "bridge/agent/pyproject.toml",
+        "bridge/macos/Package.swift",
+    ]
     missing = [path for path in required if not (ROOT / path).exists()]
     add(
         checks,

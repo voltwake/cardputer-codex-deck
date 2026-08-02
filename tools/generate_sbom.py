@@ -59,7 +59,7 @@ def main() -> int:
         "dataLicense": "CC0-1.0",
         "SPDXID": "SPDXRef-DOCUMENT",
         "name": f"Codex-Deck-{versions['release']}",
-        "documentNamespace": f"https://github.com/voltwake/cardputer-codex-deck/sbom/{versions['release']}/{uuid.uuid4()}",
+        "documentNamespace": f"https://github.com/voltwake/codex-deck/sbom/{versions['release']}/{uuid.uuid4()}",
         "creationInfo": {
             "created": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "creators": ["Tool: Codex Deck tools/generate_sbom.py"],

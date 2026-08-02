@@ -2,7 +2,7 @@
   "name": "Codex Deck",
   "internal_compatibility_name": "CardBridge",
   "description": "Independent pocket hardware companion for OpenAI Codex on M5Stack Cardputer ADV",
-  "repository": "https://github.com/voltwake/cardputer-codex-deck",
+  "repository": "https://github.com/voltwake/codex-deck",
   "platform": "macOS",
   "minimum_os": "13.0",
   "architectures": ["arm64"],
@@ -32,8 +32,9 @@
     "codex_hook_trust_if_hooks_are_enabled"
   ],
   "firmware": {
-    "build": "pio run",
-    "flash": "pio run -t upload",
+    "project": "firmware/m5stack-cardputer-adv",
+    "build": "pio run -d firmware/m5stack-cardputer-adv",
+    "flash": "pio run -d firmware/m5stack-cardputer-adv -t upload",
     "port": "/dev/cu.usbmodem*"
   },
   "health": {

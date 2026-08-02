@@ -30,6 +30,10 @@ def main() -> int:
         "docs/ARCHITECTURE.md",
         "docs/PROTOCOL.md",
         "docs/TROUBLESHOOTING.md",
+        "firmware/m5stack-cardputer-adv/platformio.ini",
+        "bridge/agent/pyproject.toml",
+        "bridge/macos/Package.swift",
+        "bridge/driver/build_driver.sh",
         "scripts/doctor.sh",
         "scripts/install-release.sh",
         "scripts/bootstrap.sh",
@@ -44,13 +48,35 @@ def main() -> int:
         if not (ROOT / relative).exists():
             errors.append(f"missing required public-project file: {relative}")
 
+    forbidden_legacy_paths = [
+        "platformio.ini",
+        "src",
+        "assets",
+        "macos",
+        "driver",
+        "bridge/cardbridge",
+        "bridge/tests",
+        "bridge/pyproject.toml",
+    ]
+    for relative in forbidden_legacy_paths:
+        if (ROOT / relative).exists():
+            errors.append(f"legacy component path still exists: {relative}")
+
     try:
         versions = json.loads((ROOT / "version.json").read_text(encoding="utf-8"))
         manifest = json.loads((ROOT / "project-install.json").read_text(encoding="utf-8"))
         if manifest.get("name") != "Codex Deck":
             errors.append("project-install.json name must be Codex Deck")
+        if manifest.get("repository") != "https://github.com/voltwake/codex-deck":
+            errors.append("project-install.json repository must use the codex-deck slug")
         if versions["release"] != versions["mac_app"]["version"]:
             errors.append("version.json release and mac_app.version differ")
+        expected_feed = (
+            "https://raw.githubusercontent.com/voltwake/codex-deck/"
+            "main/release/appcast.xml"
+        )
+        if versions.get("updates", {}).get("feed_url") != expected_feed:
+            errors.append("version.json update feed must use the codex-deck slug")
     except (OSError, ValueError, KeyError) as exc:
         errors.append(f"invalid project metadata: {exc}")
 

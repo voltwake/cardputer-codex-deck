@@ -105,7 +105,14 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=ROOT / "assets" / "fonts" / "cardbridge-ui-13.bff",
+        default=(
+            ROOT
+            / "firmware"
+            / "m5stack-cardputer-adv"
+            / "assets"
+            / "fonts"
+            / "cardbridge-ui-13.bff"
+        ),
     )
     args = parser.parse_args()
 

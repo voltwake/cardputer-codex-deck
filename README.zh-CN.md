@@ -48,7 +48,7 @@ Codex Deck 不是 OpenAI 官方产品，也不代表 OpenAI 官方背书。
 安装与开发文档从 [`docs/README.md`](docs/README.md) 开始。产品要求和历史
 验收记录仍保存在 `docs/` 中，但不作为规范安装入口。
 
-仓库名是 `cardputer-codex-deck`，当前硬件目标是 M5Stack Cardputer ADV。
+仓库名是 `codex-deck`，当前硬件目标是 M5Stack Cardputer ADV。
 
 ## 安装发布版
 
@@ -99,12 +99,13 @@ Audio 设备和一个供 Agent 使用的仅输出音频流；如果已安装 Bla
 ## 构建固件
 
 ```sh
-cd /path/to/cardputer-codex-deck
-pio run
+cd /path/to/codex-deck
+pio run -d firmware/m5stack-cardputer-adv
 ```
 
 如果 `pio` 不在 `PATH` 中，请先安装 PlatformIO Core。连接硬件后，Codex 可以
-运行 `pio run -t upload` 并使用 USB 串口完成设备验证。尽量让 PlatformIO
+运行 `pio run -d firmware/m5stack-cardputer-adv -t upload` 并使用 USB 串口完成
+设备验证。尽量让 PlatformIO
 自动发现 `/dev/cu.usbmodem*`，因为设备重置后串口名称可能变化。
 
 ## 版本与协议
@@ -124,11 +125,11 @@ Python、C++ 或 Swift 常量。协议主版本不匹配会返回明确的 `upgr
 运行完整的本地发布门禁：
 
 ```sh
-CODE_SIGN_IDENTITY="Apple Development: …" macos/scripts/release.sh
+CODE_SIGN_IDENTITY="Apple Development: …" bridge/macos/scripts/release.sh
 ```
 
 它会测试 Swift/Python、构建固件、打包并验证 App/Agent、签名 Sparkle 归档，
-并在 `macos/dist/release-<version>/` 下写入校验和与发布清单。公开分发还需要
+并在 `bridge/macos/dist/release-<version>/` 下写入校验和与发布清单。公开分发还需要
 Developer ID Application 证书和 Apple 公证凭据，详见
 [`release/README.md`](release/README.md)。
 
@@ -137,7 +138,8 @@ Developer ID Application 证书和 Apple 公证凭据，详见
 固件自带一个确定性的 Codex 主题开发吉祥物。使用随附的离线打包器重建：
 
 ```sh
-python3 tools/pack_pet.py --demo --output-dir src
+python3 tools/pack_pet.py --demo \
+  --output-dir firmware/m5stack-cardputer-adv/src
 ```
 
 如需使用官方 `hatch-pet` 流程创建的桌面 Codex v2 宠物：
@@ -145,17 +147,19 @@ python3 tools/pack_pet.py --demo --output-dir src
 ```sh
 python3 tools/pack_pet.py \
   --pet-dir "$HOME/.codex/pets/my-pet" \
-  --output-dir src
+  --output-dir firmware/m5stack-cardputer-adv/src
 ```
 
 适配器支持 1536×1872 的 8×9 App 图集和 1536×2288 的 8×11 v2 图集，只选择
 Idle、Failed、Waiting、Running 和 Review 状态，将帧缩放到 72×72，共享 16 色
-调色板量化，并写入 `src/pet_assets.*` 中的行安全 RLE。Cardputer 直接从闪存
+调色板量化，并写入 `firmware/m5stack-cardputer-adv/src/pet_assets.*` 中的行安全
+RLE。Cardputer 直接从闪存
 解码，在 Codex 详情页缩放到 100×100，每帧不分配图像缓冲区。
 
 ## 构建中文 UI 字体
 
-生成的 `assets/fonts/cardbridge-ui-13.bff` 内置了由 Source Han Sans CN Medium
+生成的 `firmware/m5stack-cardputer-adv/assets/fonts/cardbridge-ui-13.bff` 内置了
+由 Source Han Sans CN Medium
 2.005R 派生的原生 13px、4-bit 抗锯齿 GB2312 字体。原生尺寸保持小屏字宽均匀，
 并不是将 15px 字体做分数缩放。运行以下命令重建：
 
@@ -165,7 +169,7 @@ python3 tools/build_ui_font.py
 
 生成器会验证固定的源字体 checksum，并通过 `npx` 调用 `lv_font_conv` 1.5.3。
 Source Han Sans 使用 SIL Open Font License 1.1 发布，所需声明在
-`assets/fonts/LICENSE-SourceHanSans.txt`。
+`firmware/m5stack-cardputer-adv/assets/fonts/LICENSE-SourceHanSans.txt`。
 
 ## 设备控制
 
@@ -179,9 +183,9 @@ Source Han Sans 使用 SIL Open Font License 1.1 发布，所需声明在
 
 ## 项目政策
 
-主项目使用 MIT License。`driver/` 中的 BlackHole 派生音频驱动使用 GPLv3，
+主项目使用 MIT License。`bridge/driver/` 中的 BlackHole 派生音频驱动使用 GPLv3，
 并保留自己的许可证和声明。重新分发前请阅读 [`NOTICE.md`](NOTICE.md)、
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 和
-[`assets/ASSET_SOURCES.md`](assets/ASSET_SOURCES.md)。贡献、安全报告和支持
+[`firmware/m5stack-cardputer-adv/assets/ASSET_SOURCES.md`](firmware/m5stack-cardputer-adv/assets/ASSET_SOURCES.md)。贡献、安全报告和支持
 请求说明见 [`CONTRIBUTING.md`](CONTRIBUTING.md)、[`SECURITY.md`](SECURITY.md)
 和 [`SUPPORT.md`](SUPPORT.md)。

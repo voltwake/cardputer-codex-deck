@@ -2,7 +2,7 @@
 """Render deterministic Cardputer UI previews for the public documentation.
 
 The previews use the shipped background and pet RLE data, plus the geometry,
-colours, labels, and example states from ``src/ui.cpp``. They intentionally use
+colours, labels, and example states from the M5 firmware UI. They intentionally use
 safe sample task text instead of reading a live Codex session.
 """
 
@@ -80,7 +80,13 @@ def centered_text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str,
 
 
 def load_pet_frame(name: str) -> Image.Image:
-    source = (ROOT / "src" / "pet_assets.cpp").read_text(encoding="utf-8")
+    source = (
+        ROOT
+        / "firmware"
+        / "m5stack-cardputer-adv"
+        / "src"
+        / "pet_assets.cpp"
+    ).read_text(encoding="utf-8")
     palette_match = re.search(
         r"const uint16_t kPalette\[16\] PROGMEM = \{(.*?)\};", source, re.S
     )
@@ -90,7 +96,10 @@ def load_pet_frame(name: str) -> Image.Image:
         re.S,
     )
     if not palette_match or not frame_match:
-        raise RuntimeError(f"could not parse {name} from src/pet_assets.cpp")
+        raise RuntimeError(
+            f"could not parse {name} from "
+            "firmware/m5stack-cardputer-adv/src/pet_assets.cpp"
+        )
     palette = [rgb565(int(value, 16)) for value in re.findall(r"0x[0-9a-fA-F]+", palette_match.group(1))]
     encoded = [int(value, 16) for value in re.findall(r"0x[0-9a-fA-F]+", frame_match.group(1))]
     pixels: list[tuple[int, int, int, int]] = []

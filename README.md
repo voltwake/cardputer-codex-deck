@@ -53,7 +53,7 @@ Installation and development documentation starts at
 acceptance records remain in `docs/`, but they are not the canonical install
 path.
 
-The repository slug is `cardputer-codex-deck`; the current hardware target is
+The repository slug is `codex-deck`; the current hardware target is
 the M5Stack Cardputer ADV.
 
 ## Install a release
@@ -109,12 +109,12 @@ Keychain, or Codex Hook trust. See [`AGENTS.md`](AGENTS.md) and the machine-read
 ## Build firmware
 
 ```sh
-cd /path/to/cardputer-codex-deck
-pio run
+cd /path/to/codex-deck
+pio run -d firmware/m5stack-cardputer-adv
 ```
 
 Install PlatformIO Core first if `pio` is not already on `PATH`. When hardware is
-connected, Codex may run `pio run -t upload`, use the USB serial port, and perform
+connected, Codex may run `pio run -d firmware/m5stack-cardputer-adv -t upload`, use the USB serial port, and perform
 physical-device validation. Let PlatformIO auto-detect `/dev/cu.usbmodem*` because
 the port name can change after a reset.
 
@@ -136,12 +136,12 @@ fields remain compatible as legacy protocol v1 during migration.
 Run the complete local release gate with:
 
 ```sh
-CODE_SIGN_IDENTITY="Apple Development: …" macos/scripts/release.sh
+CODE_SIGN_IDENTITY="Apple Development: …" bridge/macos/scripts/release.sh
 ```
 
 It tests Swift/Python, builds firmware, packages and validates the App/Agent,
 signs the Sparkle archive, and writes checksums plus release manifests under
-`macos/dist/release-<version>/`. Public distribution additionally requires a
+`bridge/macos/dist/release-<version>/`. Public distribution additionally requires a
 Developer ID Application certificate and Apple notarization credentials; see
 [`release/README.md`](release/README.md).
 
@@ -151,7 +151,8 @@ The firmware ships with a deterministic Codex-themed development mascot. Rebuild
 it with the bundled offline packer:
 
 ```sh
-python3 tools/pack_pet.py --demo --output-dir src
+python3 tools/pack_pet.py --demo \
+  --output-dir firmware/m5stack-cardputer-adv/src
 ```
 
 To use a desktop Codex v2 pet created by the official `hatch-pet` workflow:
@@ -159,18 +160,20 @@ To use a desktop Codex v2 pet created by the official `hatch-pet` workflow:
 ```sh
 python3 tools/pack_pet.py \
   --pet-dir "$HOME/.codex/pets/my-pet" \
-  --output-dir src
+  --output-dir firmware/m5stack-cardputer-adv/src
 ```
 
 The adapter accepts both the 1536×1872 8×9 App atlas and the 1536×2288 8×11 v2
 atlas. It selects Idle, Failed, Waiting, Running, and Review; packs frames at
 72×72; quantizes them to a shared 16-colour palette; and writes row-safe RLE into
-`src/pet_assets.*`. The Cardputer decodes those runs directly from flash, scales
+`firmware/m5stack-cardputer-adv/src/pet_assets.*`. The Cardputer decodes those
+runs directly from flash, scales
 them to 100×100 on the Codex detail page, and allocates no per-frame image buffer.
 
 ## Build the Chinese UI font
 
-The generated `assets/fonts/cardbridge-ui-13.bff` embeds a native 13px, 4-bit
+The generated `firmware/m5stack-cardputer-adv/assets/fonts/cardbridge-ui-13.bff`
+embeds a native 13px, 4-bit
 anti-aliased GB2312 font derived from Source Han Sans CN Medium 2.005R. The native
 size keeps small-screen glyph advances even; it is not a fractionally scaled 15px
 face. Rebuild it with:
@@ -181,7 +184,8 @@ python3 tools/build_ui_font.py
 
 The generator verifies the pinned source-font checksum and invokes `lv_font_conv`
 1.5.3 through `npx`. Source Han Sans is distributed under the SIL Open Font
-License 1.1; the required notice is in `assets/fonts/LICENSE-SourceHanSans.txt`.
+License 1.1; the required notice is in
+`firmware/m5stack-cardputer-adv/assets/fonts/LICENSE-SourceHanSans.txt`.
 
 ## Device controls
 
@@ -204,8 +208,8 @@ License 1.1; the required notice is in `assets/fonts/LICENSE-SourceHanSans.txt`.
 ## Project policy
 
 The main project is available under the MIT License. The BlackHole-derived audio
-driver in `driver/` is GPLv3 and retains its own license and notices. Before
+driver in `bridge/driver/` is GPLv3 and retains its own license and notices. Before
 redistributing, read [`NOTICE.md`](NOTICE.md), [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md),
-and [`assets/ASSET_SOURCES.md`](assets/ASSET_SOURCES.md). Contributions, security
+and [`firmware/m5stack-cardputer-adv/assets/ASSET_SOURCES.md`](firmware/m5stack-cardputer-adv/assets/ASSET_SOURCES.md). Contributions, security
 reports, and support requests are described in [`CONTRIBUTING.md`](CONTRIBUTING.md),
 [`SECURITY.md`](SECURITY.md), and [`SUPPORT.md`](SUPPORT.md).

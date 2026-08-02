@@ -289,7 +289,11 @@ def parse_args() -> argparse.Namespace:
     source.add_argument("--pet-dir", type=Path)
     source.add_argument("--atlas", type=Path)
     source.add_argument("--demo", action="store_true")
-    parser.add_argument("--output-dir", type=Path, default=Path("src"))
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("firmware/m5stack-cardputer-adv/src"),
+    )
     return parser.parse_args()
 
 

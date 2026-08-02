@@ -70,7 +70,11 @@ extern const uint16_t kPixels[kWidth * kHeight];
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=Path)
-    parser.add_argument("--output-dir", type=Path, default=Path("src"))
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("firmware/m5stack-cardputer-adv/src"),
+    )
     return parser.parse_args()
 
 

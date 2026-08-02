@@ -3,7 +3,9 @@ set -euo pipefail
 
 script_dir=${0:A:h}
 macos_dir=${script_dir:h}
-repo_dir=${macos_dir:h}
+repo_dir=${macos_dir:h:h}
+agent_dir=${repo_dir}/bridge/agent
+firmware_dir=${repo_dir}/firmware/m5stack-cardputer-adv
 sparkle_dir=${macos_dir}/.deps/Sparkle
 sparkle_account=${SPARKLE_ACCOUNT:-com.voltwake.cardbridge}
 identity=${CODE_SIGN_IDENTITY:--}
@@ -27,15 +29,17 @@ firmware=${output_dir}/cardputer-adv-firmware-${firmware_version}.bin
 cd "${repo_dir}"
 python3 tools/generate_versions.py --check
 "${repo_dir}/scripts/bootstrap.sh"
-PYTHONPATH=bridge:. bridge/.venv/bin/python -m unittest discover -s bridge/tests -v
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --package-path macos
+PYTHONPATH="${agent_dir}:${repo_dir}" "${agent_dir}/.venv/bin/python" \
+  -m unittest discover -s "${agent_dir}/tests" -v
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  swift test --package-path "${macos_dir}"
 
 if [[ -x "${repo_dir}/tools/.venv/bin/pio" ]]; then
-  "${repo_dir}/tools/.venv/bin/pio" run
+  "${repo_dir}/tools/.venv/bin/pio" run -d "${firmware_dir}"
 elif command -v pio >/dev/null 2>&1; then
-  pio run
+  pio run -d "${firmware_dir}"
 elif [[ -x "${HOME}/.platformio/penv/bin/pio" ]]; then
-  "${HOME}/.platformio/penv/bin/pio" run
+  "${HOME}/.platformio/penv/bin/pio" run -d "${firmware_dir}"
 else
   print -u2 "PlatformIO is required for a release build."
   exit 1
@@ -81,17 +85,17 @@ fi
 
 ditto -c -k --sequesterRsrc --keepParent "${macos_dir}/dist/CardBridge.app" "${archive}"
 "${macos_dir}/scripts/create_dmg.sh" "${macos_dir}/dist/CardBridge.app" "${dmg}"
-ditto ".pio/build/cardputer/firmware.bin" "${firmware}"
+ditto "${firmware_dir}/.pio/build/cardputer/firmware.bin" "${firmware}"
 ditto "release/compatibility.json" "${output_dir}/compatibility.json"
 ditto "release/RELEASE_NOTES.md" "${output_dir}/CardBridge-${release_version}.md"
 ditto "release/appcast.xml" "${output_dir}/appcast.xml"
 ditto "LICENSE" "${output_dir}/LICENSE"
 ditto "NOTICE.md" "${output_dir}/NOTICE.md"
 ditto "THIRD_PARTY_NOTICES.md" "${output_dir}/THIRD_PARTY_NOTICES.md"
-"${repo_dir}/bridge/.venv/bin/python" tools/generate_sbom.py \
+"${agent_dir}/.venv/bin/python" tools/generate_sbom.py \
   --output "${output_dir}/CardBridge-${release_version}.spdx.json"
 
-download_prefix="https://github.com/voltwake/cardputer-codex-deck/releases/download/v${release_version}/"
+download_prefix="https://github.com/voltwake/codex-deck/releases/download/v${release_version}/"
 appcast_args=(
   --download-url-prefix "${download_prefix}"
   --embed-release-notes

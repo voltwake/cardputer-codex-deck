@@ -50,10 +50,10 @@ def main() -> int:
         "CardBridge-MIT.txt": ROOT / "LICENSE",
         "CardBridge-NOTICE.md": ROOT / "NOTICE.md",
         "THIRD_PARTY_NOTICES.md": ROOT / "THIRD_PARTY_NOTICES.md",
-        "CardBridgeMicrophone-GPL-3.0.txt": ROOT / "driver/LICENSE-GPL-3.0.txt",
-        "CardBridgeMicrophone-NOTICE.md": ROOT / "driver/NOTICE.md",
-        "SourceHanSans-OFL.txt": ROOT / "assets/fonts/LICENSE-SourceHanSans.txt",
-        "Sparkle-LICENSE.txt": ROOT / "macos/.deps/Sparkle/LICENSE",
+        "CardBridgeMicrophone-GPL-3.0.txt": ROOT / "bridge/driver/LICENSE-GPL-3.0.txt",
+        "CardBridgeMicrophone-NOTICE.md": ROOT / "bridge/driver/NOTICE.md",
+        "SourceHanSans-OFL.txt": ROOT / "firmware/m5stack-cardputer-adv/assets/fonts/LICENSE-SourceHanSans.txt",
+        "Sparkle-LICENSE.txt": ROOT / "bridge/macos/.deps/Sparkle/LICENSE",
     }
     for name, source in project_files.items():
         if not source.exists():

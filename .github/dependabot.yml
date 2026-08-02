@@ -1,7 +1,7 @@
 version: 2
 updates:
   - package-ecosystem: pip
-    directory: /bridge
+    directory: /bridge/agent
     schedule:
       interval: monthly
     open-pull-requests-limit: 5

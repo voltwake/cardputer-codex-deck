@@ -5,7 +5,7 @@
 **Codex Deck** is the public product and project name. We use the standard
 spelling `Codex`, not `CodeX`.
 
-The GitHub repository slug is `cardputer-codex-deck`; the supported hardware
+The GitHub repository slug is `codex-deck`; the supported hardware
 target is currently the M5Stack Cardputer ADV.
 
 Suggested description:

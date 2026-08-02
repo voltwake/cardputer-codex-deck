@@ -2,8 +2,9 @@
 set -euo pipefail
 
 script_dir=${0:A:h}
-repo_dir=${script_dir:h:h}
-venv=${repo_dir}/bridge/.venv
+repo_dir=${script_dir:h:h:h}
+agent_dir=${repo_dir}/bridge/agent
+venv=${agent_dir}/.venv
 python_bin=${PYTHON_BIN:-python3}
 
 if ! command -v "${python_bin}" >/dev/null 2>&1; then
@@ -23,6 +24,6 @@ if ! "${venv}/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info
   exit 1
 fi
 "${venv}/bin/python" -m pip install --disable-pip-version-check \
-  -c "${repo_dir}/bridge/constraints-macos-arm64-py310.txt" \
-  -e "${repo_dir}/bridge" \
-  -r "${repo_dir}/bridge/requirements-build.txt"
+  -c "${agent_dir}/constraints-macos-arm64-py310.txt" \
+  -e "${agent_dir}" \
+  -r "${agent_dir}/requirements-build.txt"

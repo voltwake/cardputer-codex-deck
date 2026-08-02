@@ -282,11 +282,11 @@ def _compatibility_json(data: dict[str, Any]) -> str:
 
 def outputs(data: dict[str, Any]) -> dict[Path, str]:
     return {
-        ROOT / "bridge" / "cardbridge" / "_generated_version.py": _python(data),
-        ROOT / "src" / "generated_version.h": _cpp(data),
-        ROOT / "macos" / "Shared" / "GeneratedVersion.swift": _swift(data),
-        ROOT / "macos" / "App" / "Info.plist": _info_plist(data),
-        ROOT / "macos" / "App" / "Agent-Info.plist": _agent_info_plist(data),
+        ROOT / "bridge" / "agent" / "cardbridge" / "_generated_version.py": _python(data),
+        ROOT / "firmware" / "m5stack-cardputer-adv" / "src" / "generated_version.h": _cpp(data),
+        ROOT / "bridge" / "macos" / "Shared" / "GeneratedVersion.swift": _swift(data),
+        ROOT / "bridge" / "macos" / "App" / "Info.plist": _info_plist(data),
+        ROOT / "bridge" / "macos" / "App" / "Agent-Info.plist": _agent_info_plist(data),
         ROOT / "release" / "compatibility.json": _compatibility_json(data),
     }
 

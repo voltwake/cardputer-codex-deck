@@ -25,6 +25,6 @@ fi
 osascript -e 'tell application "CardBridge" to quit' >/dev/null 2>&1 || true
 rm -rf /Applications/CardBridge.app
 if (( remove_driver )); then
-  "${root_dir}/driver/uninstall_driver.sh"
+  "${root_dir}/bridge/driver/uninstall_driver.sh"
 fi
 print "CardBridge App removed. Pairing data was preserved."

@@ -14,7 +14,10 @@ class UiFontBuilderTests(unittest.TestCase):
             self.assertIn(ord(character), codepoints)
 
         self.assertEqual(PIXEL_SIZE, 13)
-        asset = Path(f"assets/fonts/cardbridge-ui-{PIXEL_SIZE}.bff")
+        asset = Path(
+            f"firmware/m5stack-cardputer-adv/assets/fonts/"
+            f"cardbridge-ui-{PIXEL_SIZE}.bff"
+        )
         self.assertTrue(asset.is_file())
         self.assertEqual(sha256(asset), OUTPUT_SHA256)
 

@@ -51,14 +51,14 @@ jobs:
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
           SPARKLE_ED_KEY: ${{ secrets.SPARKLE_ED_KEY }}
-        run: macos/scripts/release.sh
+        run: bridge/macos/scripts/release.sh
       - name: Create draft GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=${GITHUB_REF_NAME#v}
           gh release create "$GITHUB_REF_NAME" \
-            macos/dist/release-"$version"/* \
+            bridge/macos/dist/release-"$version"/* \
             --draft \
             --title "Codex Deck $version" \
             --notes-file release/RELEASE_NOTES.md
