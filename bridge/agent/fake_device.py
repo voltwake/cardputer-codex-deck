@@ -4,8 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import queue
 import socket
 import struct
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,9 @@ from cardbridge._generated_version import (
     FIRMWARE_VERSION,
 )
 from cardbridge.protocol import AUDIO_SAMPLES_PER_FRAME, encode_message, pack_audio
+
+
+PAIRING_KEEPALIVE_SECONDS = 5.0
 
 
 class FakeDevice:
@@ -98,7 +103,7 @@ class FakeDevice:
             raise RuntimeError(f"firmware update required: {response}")
         if response["t"] == "pair_required":
             if pair_code is None:
-                pair_code = input("Pairing code shown by CardBridge: ").strip()
+                pair_code = self._wait_for_pair_code()
             self.send({"t": "pair", "code": pair_code})
             response = self.receive()
         if response["t"] == "pair_error":
@@ -111,6 +116,25 @@ class FakeDevice:
         if not self.token:
             raise RuntimeError("bridge authenticated without a token")
         print(f"Authenticated to {response.get('mac_name', 'Mac')}")
+
+    def _wait_for_pair_code(self) -> str:
+        """Keep the pending pairing alive while a user reads the menu-bar code."""
+        submitted: queue.Queue[str] = queue.Queue(maxsize=1)
+
+        def prompt() -> None:
+            submitted.put(input("Pairing code shown by CardBridge: ").strip())
+
+        threading.Thread(target=prompt, daemon=True).start()
+        while True:
+            try:
+                return submitted.get(timeout=PAIRING_KEEPALIVE_SECONDS)
+            except queue.Empty:
+                self.send({"t": "ping"})
+                response = self.receive()
+                if response.get("t") != "pong":
+                    raise RuntimeError(
+                        f"unexpected response while pairing: {response.get('t')}"
+                    )
 
     def close(self) -> None:
         if self.file:

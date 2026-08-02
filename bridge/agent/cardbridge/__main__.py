@@ -10,6 +10,7 @@ from pathlib import Path
 from .audio import CARDBRIDGE_FEED_DEVICE
 from .control_server import default_control_socket
 from .server import BridgeApp
+from .shutdown import request_shutdown
 
 
 def parser() -> argparse.ArgumentParser:
@@ -63,7 +64,7 @@ async def run(args: argparse.Namespace) -> None:
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(signum, stop.set)
+            loop.add_signal_handler(signum, request_shutdown, loop, stop)
         except NotImplementedError:
             pass
     started = False

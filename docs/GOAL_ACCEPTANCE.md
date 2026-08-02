@@ -54,8 +54,10 @@ environment's Python module path, and the complete package build then passed.
 - `CardBridge.app`, `CardBridgeAgent.app`, Python package, bundle IDs, mDNS,
   ports, socket, Keychain/config locations, audio-device names, and release
   artifact names remain unchanged for 1.x compatibility.
-- The installed App and running Agent were not replaced, no macOS permission
-  was changed, and the connected M5 was not flashed.
+- During the directory migration itself, the installed App and running Agent
+  were not replaced, no macOS permission was changed, and the connected M5 was
+  not flashed. The later installed-App regression is recorded separately in
+  [`MULTI_DEVICE_GOAL_ACCEPTANCE.md`](MULTI_DEVICE_GOAL_ACCEPTANCE.md).
 - The four user-owned PNG files under `docs/` remain untracked and excluded
   from the migration commit.
 

@@ -1,10 +1,10 @@
 # Completed multi-device Goal acceptance record
 
 This is the machine-checkable handoff record for the completed multi-device
-desktop Agent Goal, frozen in local baseline commit `ba6c95f`. The active Goal
-has moved on to repository and directory standardization in [`GOAL.md`](GOAL.md).
-This record intentionally contains no thread IDs, pairing material, prompt
-text, response text, reasoning, or tool output.
+desktop Agent Goal, whose implementation baseline is commit `ba6c95f`. The
+active Goal has moved on to repository and directory standardization in
+[`GOAL.md`](GOAL.md). This record intentionally contains no thread IDs,
+pairing material, prompt text, response text, reasoning, or tool output.
 
 ## Desktop and automated evidence — 2026-08-02
 
@@ -30,14 +30,37 @@ The actual upstream notification is paired with the automated
 `CodexMonitor`/`TokenUsageStore` ingestion test and the device-size, delta,
 rate, duplicate, reset, out-of-order, unavailable, and Swift UI fixtures.
 
-## Explicitly deferred physical action
+## Installed App and live multi-device acceptance — 2026-08-02
 
-The existing installed M5 firmware was not updated, flashed, or replaced.
-The completed multi-device Goal deferred one physical regression pass:
-reconnect the existing pairing, verify keyboard down/up and microphone
-bridging, confirm Codex state/quota, and keep it online beside a second
-simulated or real device. This handoff does not install the App, replace a
-running Agent, or trigger macOS permission prompts.
+- The current source build of App and Agent `1.1.0` build `9` was installed over
+  a stale same-version installation. No permission prompt appeared and the
+  existing Accessibility grant, driver, pairing, and audio-device selection
+  were retained.
+- The unmodified M5 firmware `0.3.0` automatically reconnected through protocol
+  `2.0` with compatibility `ok`. It held the audio lease while authenticated
+  packet counts increased, with zero invalid packets.
+- A second simulated standard device used the Waveshare
+  ESP32-S3-Touch-AMOLED-1.75C identity, protocol `2.1`, and 11 declared
+  capabilities. It paired while the M5 stayed online, exercised authenticated
+  keyboard down/up and audio traffic, and correctly reported the audio lease as
+  busy while the M5 remained owner.
+- During the dual-device run the Agent reported Accessibility enabled, its Core
+  Audio stream running, Codex App Server connected, Hooks listening, and
+  subscription quota available. The simulator was then unpaired and its local
+  token cache removed; the existing M5 pairing was left untouched.
+- Live acceptance exposed an integrated Agent restart that could remain in
+  `stopping`. mDNS teardown is now bounded, and every signal or App control
+  shutdown request has an eight-second process-exit deadline. After installing
+  the corrected build, an App control restart changed the Agent PID, the M5
+  automatically reconnected, and audio, Accessibility, Codex, Hooks, and quota
+  all returned healthy. Final `./scripts/healthcheck.sh --json` reported zero
+  errors and zero warnings.
+- The final verification passed 86 Python tests, 5 Swift tests, the M5 firmware
+  build at 65,220 bytes RAM (19.9%) and 2,346,170 bytes Flash (70.2%), the full
+  App/Agent/driver package build, generated-file checks, and `git diff --check`.
+
+The existing M5 firmware was not updated, flashed, or replaced during this
+acceptance pass.
 
 The next independent Waveshare firmware Goal must send a stable `dev_id`,
 vendor/model/name metadata, protocol `2.1`, and only the capabilities it

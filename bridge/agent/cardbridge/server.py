@@ -37,6 +37,7 @@ from .protocol import (
     encode_message,
     unpack_audio,
 )
+from .shutdown import request_shutdown
 from ._generated_version import (
     AGENT_API_MAJOR,
     AGENT_API_MINOR,
@@ -49,6 +50,7 @@ from .usage import TokenUsageStore
 from .versioning import CompatibilityError, DeviceCompatibility, negotiate_device
 
 LOG = logging.getLogger("cardbridge")
+MDNS_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 
 
 def _mdns_instance_label(mac_name: str, bridge_id: str) -> str:
@@ -387,7 +389,13 @@ class BridgeApp:
                 "hooks_installed": self.codex_hooks_installed,
             }
         if name in {"restart", "shutdown"}:
-            asyncio.get_running_loop().call_later(0.1, self.shutdown_requested.set)
+            loop = asyncio.get_running_loop()
+            loop.call_later(
+                0.1,
+                request_shutdown,
+                loop,
+                self.shutdown_requested,
+            )
             return {"ok": True, "action": name}
         return {"ok": False, "error": "unknown_command"}
 
@@ -511,16 +519,30 @@ class BridgeApp:
         LOG.info("mDNS: %s at %s", service_name, address)
 
     async def _stop_mdns(self) -> None:
-        if self.zeroconf is None:
-            self.service_info = None
+        zeroconf = self.zeroconf
+        service_info = self.service_info
+        self.zeroconf = None
+        self.service_info = None
+        if zeroconf is None:
             return
         try:
-            if self.service_info is not None:
-                await self.zeroconf.async_unregister_service(self.service_info)
-        finally:
-            await self.zeroconf.async_close()
-            self.service_info = None
-            self.zeroconf = None
+            if service_info is not None:
+                await asyncio.wait_for(
+                    zeroconf.async_unregister_service(service_info),
+                    MDNS_SHUTDOWN_TIMEOUT_SECONDS,
+                )
+        except asyncio.TimeoutError:
+            LOG.warning("mDNS unregister timed out during shutdown")
+        except Exception as exc:
+            LOG.warning("mDNS unregister failed during shutdown: %s", exc)
+        try:
+            await asyncio.wait_for(
+                zeroconf.async_close(), MDNS_SHUTDOWN_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            LOG.warning("mDNS close timed out during shutdown")
+        except Exception as exc:
+            LOG.warning("mDNS close failed during shutdown: %s", exc)
 
     async def _restart_mdns(self) -> None:
         await self._stop_mdns()

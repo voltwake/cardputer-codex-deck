@@ -5,6 +5,7 @@ import json
 import socket
 import struct
 import tempfile
+import threading
 import unittest
 from unittest.mock import AsyncMock, patch
 from pathlib import Path
@@ -234,6 +235,29 @@ class ServerEndToEndTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("f13", "up"), keys)
         self.assertGreaterEqual(self.app.audio.jitter.received, 3)
 
+    def test_fake_device_keeps_pairing_alive_while_waiting_for_input(self) -> None:
+        device = FakeDevice("127.0.0.1", 7788, 7789)
+        allow_input = threading.Event()
+        sent: list[dict[str, object]] = []
+
+        def fake_input(_prompt: str) -> str:
+            self.assertTrue(allow_input.wait(1))
+            return "483291"
+
+        def fake_send(message: dict[str, object]) -> None:
+            sent.append(message)
+            allow_input.set()
+
+        device.send = fake_send  # type: ignore[method-assign]
+        device.receive = lambda: {"t": "pong"}  # type: ignore[method-assign]
+        with (
+            patch("builtins.input", side_effect=fake_input),
+            patch("fake_device.PAIRING_KEEPALIVE_SECONDS", 0.01),
+        ):
+            self.assertEqual(device._wait_for_pair_code(), "483291")
+
+        self.assertEqual(sent, [{"t": "ping"}])
+
 
 class MdnsLifecycleTests(unittest.IsolatedAsyncioTestCase):
     def test_instance_label_is_bounded_by_utf8_bytes(self) -> None:
@@ -294,6 +318,70 @@ class MdnsLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 await app._refresh_network()
             self.assertFalse(app.network_available)
             self.assertIn("network", app.status_snapshot()["agent"]["issues"])
+
+    async def test_mdns_shutdown_timeout_cannot_stall_agent_restart(self) -> None:
+        class HangingZeroconf:
+            def __init__(self) -> None:
+                self.unregister_started = False
+                self.close_started = False
+
+            async def async_unregister_service(self, _service: object) -> None:
+                self.unregister_started = True
+                await asyncio.Event().wait()
+
+            async def async_close(self) -> None:
+                self.close_started = True
+                await asyncio.Event().wait()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            app = BridgeApp(
+                config_path=Path(temporary) / "config.json",
+                no_audio=True,
+                dry_run=True,
+                advertise=False,
+                enable_agents=False,
+            )
+            hanging = HangingZeroconf()
+            app.zeroconf = hanging
+            app.service_info = object()
+
+            with patch("cardbridge.server.MDNS_SHUTDOWN_TIMEOUT_SECONDS", 0.01):
+                await asyncio.wait_for(app._stop_mdns(), 0.2)
+
+        self.assertTrue(hanging.unregister_started)
+        self.assertTrue(hanging.close_started)
+        self.assertIsNone(app.zeroconf)
+        self.assertIsNone(app.service_info)
+
+    async def test_mdns_close_still_runs_after_unregister_failure(self) -> None:
+        class FailingZeroconf:
+            def __init__(self) -> None:
+                self.close_called = False
+
+            async def async_unregister_service(self, _service: object) -> None:
+                raise RuntimeError("unregister failed")
+
+            async def async_close(self) -> None:
+                self.close_called = True
+
+        with tempfile.TemporaryDirectory() as temporary:
+            app = BridgeApp(
+                config_path=Path(temporary) / "config.json",
+                no_audio=True,
+                dry_run=True,
+                advertise=False,
+                enable_agents=False,
+            )
+            failing = FailingZeroconf()
+            app.zeroconf = failing
+            app.service_info = object()
+
+            with self.assertLogs("cardbridge", level="WARNING"):
+                await app._stop_mdns()
+
+        self.assertTrue(failing.close_called)
+        self.assertIsNone(app.zeroconf)
+        self.assertIsNone(app.service_info)
 
 
 class StartupDegradationTests(unittest.IsolatedAsyncioTestCase):

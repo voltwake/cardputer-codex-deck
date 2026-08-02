@@ -9,8 +9,8 @@ These are the current documents an installer or AI agent should use:
   standardization acceptance record, initially populated with the migration
   baseline and completed by the implementer.
 - [`MULTI_DEVICE_GOAL_ACCEPTANCE.md`](MULTI_DEVICE_GOAL_ACCEPTANCE.md) —
-  completed multi-device Goal evidence and its explicitly deferred physical
-  acceptance step.
+  completed multi-device Goal evidence, including installed-App and live
+  two-device acceptance.
 - [`BRANDING.md`](BRANDING.md) — public Codex Deck name and internal
   CardBridge compatibility identifiers.
 - [`INSTALL.md`](INSTALL.md) — prebuilt and source installation, permissions,
