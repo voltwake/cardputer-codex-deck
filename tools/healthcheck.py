@@ -36,6 +36,21 @@ def read_plist(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def agent_matches_expected(
+    snapshot: dict[str, Any], expected_app: dict[str, Any]
+) -> bool:
+    agent = snapshot.get("agent", {})
+    return (
+        agent.get("version") == expected_app.get("version")
+        and str(agent.get("build")) == str(expected_app.get("build"))
+    )
+
+
+def agent_has_settled(snapshot: dict[str, Any]) -> bool:
+    agent = snapshot.get("agent", {})
+    return agent.get("state") not in {"starting", "stopping", "stopped", None}
+
+
 def local_snapshot(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     client: socket.socket | None = None
     stream = None
@@ -119,8 +134,14 @@ def main() -> int:
     deadline = time.monotonic() + max(0, args.wait if app_running else 0)
     while True:
         if args.socket.exists():
-            snapshot, error = local_snapshot(args.socket)
-            if snapshot:
+            candidate, error = local_snapshot(args.socket)
+            if candidate:
+                snapshot = candidate
+            if (
+                snapshot
+                and agent_matches_expected(snapshot, expected_app)
+                and agent_has_settled(snapshot)
+            ):
                 break
         if time.monotonic() >= deadline:
             break
@@ -145,10 +166,11 @@ def main() -> int:
     )
     if snapshot:
         agent = snapshot.get("agent", {})
+        agent_version_ok = agent_matches_expected(snapshot, expected_app)
         checks.append(
             {
                 "name": "agent_version",
-                "status": "ok" if agent.get("version") == expected_app["version"] else "error",
+                "status": "ok" if agent_version_ok else "error",
                 "detail": f"{agent.get('version')} ({agent.get('build')})",
                 "expected": f"{expected_app['version']} ({expected_app['build']})",
             }

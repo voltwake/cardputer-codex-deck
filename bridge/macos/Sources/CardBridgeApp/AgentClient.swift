@@ -151,9 +151,11 @@ final class AgentClient: ObservableObject {
                 }
                 if let error {
                     self.connectionState = .failed(error.localizedDescription)
+                    AgentSupervisor.shared.noteAgentUnavailable()
                     self.scheduleReconnect()
                 } else if isComplete {
                     self.connectionState = .failed(L10n.text("Bridge Agent 已断开"))
+                    AgentSupervisor.shared.noteAgentUnavailable()
                     self.scheduleReconnect()
                 } else {
                     self.receiveNext()
@@ -192,8 +194,7 @@ final class AgentClient: ObservableObject {
             }
             if let error = hello.compatibilityError {
                 connectionState = .incompatible(error)
-                running = false
-                connection?.cancel()
+                recoverFromIncompatibleAgent(requestShutdown: true)
                 return
             }
             connectionState = .connected
@@ -213,8 +214,7 @@ final class AgentClient: ObservableObject {
             connectionState = .incompatible(
                 L10n.format("需要 Agent API %@", "\(major).\(minor)")
             )
-            running = false
-            connection?.cancel()
+            recoverFromIncompatibleAgent(requestShutdown: false)
         default:
             break
         }
@@ -229,6 +229,21 @@ final class AgentClient: ObservableObject {
         ]
         request.merge(fields) { _, new in new }
         send(request)
+    }
+
+    private func recoverFromIncompatibleAgent(requestShutdown: Bool) {
+        if requestShutdown {
+            // A previous App build may still own the socket during its bounded
+            // shutdown window. Ask it to exit before the supervisor retries
+            // the exact Agent bundled with this App.
+            sendCommand(name: "shutdown")
+        }
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard let self, self.running else { return }
+            AgentSupervisor.shared.replaceIncompatibleAgent()
+            self.scheduleReconnect()
+        }
     }
 
     private func send(_ object: [String: Any]) {

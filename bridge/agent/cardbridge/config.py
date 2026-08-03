@@ -145,6 +145,40 @@ class BridgeConfig:
                 return None
             return token
 
+    def update_device_metadata(
+        self,
+        device_id: str,
+        *,
+        name: str = "",
+        vendor: str = "",
+        model: str = "",
+        firmware: str = "",
+        firmware_build: str = "",
+    ) -> bool:
+        """Refresh non-secret pairing metadata after an authenticated hello."""
+
+        candidates = {
+            "name": name,
+            "vendor": vendor,
+            "model": model,
+            "firmware": firmware,
+            "firmware_build": firmware_build,
+        }
+        with self._lock:
+            record = self.data["devices"].get(device_id)
+            if not isinstance(record, dict):
+                return False
+            changed = False
+            for key, value in candidates.items():
+                # A legacy or minimal hello must not erase richer metadata
+                # learned from an earlier firmware build.
+                if value and record.get(key) != value:
+                    record[key] = value
+                    changed = True
+            if changed:
+                self.save()
+            return changed
+
     def paired_devices(self) -> list[dict[str, object]]:
         with self._lock:
             result: list[dict[str, object]] = []

@@ -51,6 +51,8 @@ from .versioning import CompatibilityError, DeviceCompatibility, negotiate_devic
 
 LOG = logging.getLogger("cardbridge")
 MDNS_SHUTDOWN_TIMEOUT_SECONDS = 2.0
+DEVICE_SEND_TIMEOUT_SECONDS = 2.0
+MODIFIER_KEYS = frozenset({"cmd", "shift", "alt", "ctrl"})
 
 
 def _mdns_instance_label(mac_name: str, bridge_id: str) -> str:
@@ -579,6 +581,23 @@ class BridgeApp:
                         authenticated_token = str(supplied_token)
                         self.registry.remove_pairing(connection_id)
                         assert compatibility is not None
+                        try:
+                            self.config.update_device_metadata(
+                                device_id,
+                                name=compatibility.name or compatibility.model,
+                                vendor=compatibility.vendor,
+                                model=compatibility.model,
+                                firmware=compatibility.firmware_version,
+                                firmware_build=compatibility.firmware_build,
+                            )
+                        except OSError as exc:
+                            # Metadata freshness must not turn a valid pairing
+                            # into an unavailable keyboard/audio connection.
+                            LOG.warning(
+                                "could not refresh metadata for %s: %s",
+                                device_id,
+                                exc,
+                            )
                         await self._send(
                             writer,
                             {
@@ -715,16 +734,25 @@ class BridgeApp:
     ) -> None:
         missed = 0
         while True:
+            if not self._session_is_current(device):
+                return
             try:
                 message = await self._read_message(reader, timeout=5)
                 missed = 0
             except asyncio.TimeoutError:
+                if not self._session_is_current(device):
+                    return
                 missed += 1
                 if missed >= 3:
                     raise
                 await self._send(writer, {"t": "ping", "token": token})
                 continue
 
+            # A same-ID replacement can happen while the old task is awaiting
+            # input. Never let already-buffered authenticated messages from the
+            # superseded connection mutate global keyboard/audio/topic state.
+            if not self._session_is_current(device):
+                return
             message_type = message["t"]
             supplied_token = message.get("token")
             if not isinstance(supplied_token, str) or not secrets.compare_digest(
@@ -757,8 +785,18 @@ class BridgeApp:
                 modifiers = message.get("m", [])
                 if not isinstance(key, str) or not isinstance(modifiers, list):
                     continue
+                # Vendor keyboards may spell ASCII key names differently.
+                # Canonicalize before global ownership so "X" and "x" (or
+                # "CTRL" and "ctrl") cannot become duplicate macOS events.
+                key = key.lower() if key.isascii() else key
                 allowed = {"cmd", "shift", "alt", "ctrl"}
-                clean_modifiers = [item for item in modifiers if item in allowed]
+                clean_modifiers: list[str] = []
+                for item in modifiers:
+                    if not isinstance(item, str):
+                        continue
+                    canonical = item.lower() if item.isascii() else item
+                    if canonical in allowed and canonical not in clean_modifiers:
+                        clean_modifiers.append(canonical)
                 self._handle_key(device, key, str(action), clean_modifiers)
             elif message_type == "agent_list_req":
                 if not device.has_capability("agents.snapshot.v1"):
@@ -809,7 +847,18 @@ class BridgeApp:
 
     async def _send(self, writer: asyncio.StreamWriter, message: dict[str, Any]) -> None:
         writer.write(encode_message(message))
-        await writer.drain()
+        await asyncio.wait_for(writer.drain(), DEVICE_SEND_TIMEOUT_SECONDS)
+
+    def _session_is_current(self, device: DeviceSession) -> bool:
+        return (
+            not device.replaced
+            and self.registry.get(device.device_id) is device
+        )
+
+    @staticmethod
+    def _close_failed_writer(writer: Any) -> None:
+        if not writer.is_closing():
+            writer.close()
 
     def _new_jitter_buffer(self) -> JitterBuffer:
         return JitterBuffer(self.jitter_ms)
@@ -844,7 +893,16 @@ class BridgeApp:
         if not owners:
             self._held_key_owners.pop(key, None)
             injected_modifiers = self._injected_key_modifiers.pop(key, held_modifiers)
-            self.keyboard.inject(key, "up", injected_modifiers)
+            # Modifier key-up events must not carry their own flag. The device
+            # already sends that invariant, but the global multi-device owner
+            # map intentionally preserves the first key-down flags and must
+            # restore the invariant at the final injection boundary.
+            release_modifiers = (
+                [item for item in injected_modifiers if item != key]
+                if key in MODIFIER_KEYS
+                else injected_modifiers
+            )
+            self.keyboard.inject(key, "up", release_modifiers)
 
     def _release_session_keys(self, device: DeviceSession) -> None:
         for key, modifiers in tuple(device.held_keys.items()):
@@ -936,7 +994,11 @@ class BridgeApp:
     async def _broadcast_audio_lease(self) -> None:
         owner = self._audio_owner()
         for device in tuple(self.registry.all()):
-            if not device.has_capability("audio.lease.v1") or device.writer.is_closing():
+            if (
+                not self._session_is_current(device)
+                or not device.has_capability("audio.lease.v1")
+                or device.writer.is_closing()
+            ):
                 continue
             state = "available" if owner is None else (
                 "owner" if owner is device else "busy"
@@ -951,7 +1013,8 @@ class BridgeApp:
                         "token": device.token,
                     },
                 )
-            except (ConnectionError, OSError):
+            except (asyncio.TimeoutError, ConnectionError, OSError, ProtocolError):
+                self._close_failed_writer(device.writer)
                 continue
 
     def _agent_changed(self) -> None:
@@ -968,11 +1031,16 @@ class BridgeApp:
     async def _broadcast_agent_status(self) -> None:
         self._agent_broadcast_pending = False
         for device in tuple(self.registry.all()):
-            if device.writer.is_closing() or not device.has_capability("agents.snapshot.v1"):
+            if (
+                not self._session_is_current(device)
+                or device.writer.is_closing()
+                or not device.has_capability("agents.snapshot.v1")
+            ):
                 continue
             try:
                 await self._send_agent_snapshot(device, "agent_status")
-            except (ConnectionError, OSError):
+            except (asyncio.TimeoutError, ConnectionError, OSError, ProtocolError):
+                self._close_failed_writer(device.writer)
                 continue
 
     def _usage_changed(self) -> None:
@@ -1126,16 +1194,17 @@ class BridgeApp:
             )
         else:
             min_interval = 1000
-        device.subscriptions = set(accepted)
-        device.min_interval_ms = min_interval
+        device.subscriptions.update(accepted)
+        if accepted:
+            device.min_interval_ms = min_interval
         device.pending_topics.update(accepted)
         await self._send(
             device.writer,
             {
                 "t": "sync_subscribed",
                 "id": request_id,
-                "topics": accepted,
-                "min_interval_ms": min_interval,
+                "topics": sorted(device.subscriptions),
+                "min_interval_ms": device.min_interval_ms,
                 "token": device.token,
             },
         )
@@ -1162,9 +1231,12 @@ class BridgeApp:
             }
             device.subscriptions.difference_update(removed)
             device.pending_topics.difference_update(removed)
+            for topic in removed:
+                device.subscription_last_sent_ms.pop(topic, None)
         else:
             device.subscriptions.clear()
             device.pending_topics.clear()
+            device.subscription_last_sent_ms.clear()
         await self._send(
             device.writer,
             {
@@ -1239,7 +1311,11 @@ class BridgeApp:
     async def _flush_topic_subscriptions(self) -> None:
         timestamp = int(time.time() * 1000)
         for device in tuple(self.registry.all()):
-            if not device.pending_topics or device.writer.is_closing():
+            if (
+                not self._session_is_current(device)
+                or not device.pending_topics
+                or device.writer.is_closing()
+            ):
                 continue
             for topic in tuple(device.pending_topics):
                 if topic not in device.subscriptions:
@@ -1250,8 +1326,11 @@ class BridgeApp:
                     continue
                 try:
                     await self._send_topic(device, topic, "sync_update")
-                except (ConnectionError, OSError, ProtocolError):
-                    continue
+                except (asyncio.TimeoutError, ConnectionError, OSError, ProtocolError):
+                    self._close_failed_writer(device.writer)
+                    break
+                if not self._session_is_current(device):
+                    break
                 device.subscription_last_sent_ms[topic] = timestamp
                 device.pending_topics.discard(topic)
 

@@ -8,6 +8,9 @@ from .audio import JitterBuffer
 from .versioning import DeviceCompatibility
 
 
+MAX_ACK_CURSORS = 64
+
+
 def now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -113,7 +116,15 @@ class DeviceSession:
         return sequence
 
     def acknowledge(self, session_id: str, updated_ms: int) -> None:
+        # Keep the cursor map bounded and refresh insertion order when an
+        # existing session is acknowledged again. Codex sessions are already
+        # bounded, but a long-lived device can otherwise retain IDs that have
+        # aged out of the shared store forever.
+        self.ack_cursors.pop(session_id, None)
         self.ack_cursors[session_id] = updated_ms
+        while len(self.ack_cursors) > MAX_ACK_CURSORS:
+            oldest = next(iter(self.ack_cursors))
+            self.ack_cursors.pop(oldest, None)
 
     def is_acknowledged(self, session_id: str, updated_ms: int) -> bool:
         return self.ack_cursors.get(session_id) == updated_ms

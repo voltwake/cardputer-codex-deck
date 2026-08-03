@@ -66,3 +66,45 @@ The next independent Waveshare firmware Goal must send a stable `dev_id`,
 vendor/model/name metadata, protocol `2.1`, and only the capabilities it
 implements; it must use the documented TCP `7788`, UDP `7789`, HMAC audio
 format, and capability-gated `sync_*` topics in `PROTOCOL.md`.
+
+## Exhaustive compatibility follow-up — 2026-08-03
+
+- A full firmware → TCP/UDP protocol → Agent registry/keyboard/audio/topic
+  state → Swift App audit found and fixed five additional cross-device defects:
+  modifier key-up reasserting its own Quartz flag, superseded same-ID sessions
+  processing buffered input, later subscriptions replacing earlier topics,
+  unbounded per-device acknowledgement history, and a stalled device writer
+  blocking later broadcasts. ASCII key names are normalized before shared
+  ownership. Explicit protocol-v1 clients that omit the capability array now
+  receive the documented legacy defaults, and paired device metadata refreshes
+  after authenticated firmware reconnects.
+- An in-place App update exposed a separate client lifecycle race: build 10
+  could see the old Agent inside its bounded shutdown window, reject the stale
+  build, and then remain behind a dead Unix socket. App/Agent build 12 probes
+  socket reachability, requests shutdown from an incompatible old Agent, and
+  retries the exact bundled build. The original failure was reproduced during
+  installation. The build 11 → 12 update then exposed a health-check false
+  positive while the old Agent was still stopping; health checks now wait for
+  the exact expected build in a settled state. The corrected install recovered
+  automatically and `./scripts/healthcheck.sh --json` reported zero errors and
+  zero warnings against App/Agent build 12.
+- `./scripts/test.sh` passed 96 Python tests and 5 Swift tests. The firmware
+  build passed at 65,220 bytes RAM (19.9%) and 2,346,170 bytes Flash (70.2%),
+  generated-file checks passed, and the complete signed App/Agent/driver build
+  validated successfully.
+- The installed App and Agent both report `1.1.0` build `12`. The existing M5
+  automatically reconnected as firmware `0.3.0` build `8`, protocol `2.0`,
+  with all five implemented capabilities, Accessibility enabled, audio output
+  running, no Agent issues, and zero invalid audio packets.
+- A second simulated Waveshare device connected concurrently over protocol
+  `2.1` with all 11 standard capabilities. It exercised authenticated keyboard
+  down/up, additive `bridge.status` then `network.status` subscriptions, and
+  authenticated UDP audio while the M5 remained microphone owner. The second
+  device correctly stayed `busy`; both devices recorded zero invalid packets.
+  It was then disconnected and unpaired, leaving one online/paired M5 and no
+  pending pairing request.
+
+Firmware source metadata is now `0.3.0` build `9` so the already-generated
+protocol `2.1` identity is no longer indistinguishable from the physical build
+8/protocol `2.0` image. No firmware behavior was changed for the Ctrl fix, and
+the physical M5 was not flashed during this follow-up.

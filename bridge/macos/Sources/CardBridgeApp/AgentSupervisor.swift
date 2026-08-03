@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 @MainActor
 final class AgentSupervisor {
@@ -7,7 +8,11 @@ final class AgentSupervisor {
     private var process: Process?
     private var restartTask: Task<Void, Never>?
     private var unavailableTask: Task<Void, Never>?
+    private var socketProbe: NWConnection?
+    private var socketProbeTimeout: Task<Void, Never>?
+    private let socketProbeQueue = DispatchQueue(label: "com.voltwake.cardbridge.agent-probe")
     private var shouldRun = false
+    private var replacingIncompatibleAgent = false
 
     private init() {}
 
@@ -28,6 +33,8 @@ final class AgentSupervisor {
         restartTask = nil
         unavailableTask?.cancel()
         unavailableTask = nil
+        cancelSocketProbe()
+        replacingIncompatibleAgent = false
         if let process, process.isRunning {
             process.terminate()
         }
@@ -37,6 +44,8 @@ final class AgentSupervisor {
     func noteAgentAvailable() {
         unavailableTask?.cancel()
         unavailableTask = nil
+        cancelSocketProbe()
+        replacingIncompatibleAgent = false
     }
 
     func noteAgentUnavailable() {
@@ -49,12 +58,29 @@ final class AgentSupervisor {
         }
     }
 
+    func replaceIncompatibleAgent() {
+        guard shouldRun else { return }
+        replacingIncompatibleAgent = true
+        unavailableTask?.cancel()
+        unavailableTask = nil
+        cancelSocketProbe()
+        restartTask?.cancel()
+        restartTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.restartTask = nil
+            self.ensureRunning(respectExistingSocket: false)
+        }
+    }
+
     private func ensureRunning(respectExistingSocket: Bool) {
         guard shouldRun, process == nil else { return }
         if respectExistingSocket,
            FileManager.default.fileExists(atPath: AgentClient.defaultSocketPath) {
+            probeExistingSocket()
             return
         }
+        cancelSocketProbe()
         guard let executable = bundledAgentExecutable else {
             return
         }
@@ -103,8 +129,49 @@ final class AgentSupervisor {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !Task.isCancelled, let self else { return }
             self.restartTask = nil
-            self.ensureRunning(respectExistingSocket: true)
+            self.ensureRunning(
+                respectExistingSocket: !self.replacingIncompatibleAgent
+            )
         }
+    }
+
+    private func probeExistingSocket() {
+        guard shouldRun, socketProbe == nil else { return }
+        let probe = NWConnection(
+            to: .unix(path: AgentClient.defaultSocketPath),
+            using: .tcp
+        )
+        socketProbe = probe
+        probe.stateUpdateHandler = { [weak self, weak probe] state in
+            Task { @MainActor in
+                guard let self, let probe, self.socketProbe === probe else { return }
+                switch state {
+                case .ready:
+                    self.cancelSocketProbe()
+                case .waiting, .failed:
+                    self.cancelSocketProbe()
+                    self.ensureRunning(respectExistingSocket: false)
+                default:
+                    break
+                }
+            }
+        }
+        probe.start(queue: socketProbeQueue)
+        socketProbeTimeout = Task { [weak self, weak probe] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled, let self, let probe,
+                  self.socketProbe === probe else { return }
+            self.cancelSocketProbe()
+            self.ensureRunning(respectExistingSocket: false)
+        }
+    }
+
+    private func cancelSocketProbe() {
+        socketProbeTimeout?.cancel()
+        socketProbeTimeout = nil
+        socketProbe?.stateUpdateHandler = nil
+        socketProbe?.cancel()
+        socketProbe = nil
     }
 
     private var bundledAgentExecutable: URL? {

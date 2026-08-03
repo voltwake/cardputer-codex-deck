@@ -166,7 +166,10 @@ def negotiate_device(message: dict[str, Any]) -> DeviceCompatibility:
                 },
             )
 
-    raw_capabilities = message.get("capabilities", [])
+    raw_capabilities = message.get(
+        "capabilities",
+        list(_LEGACY_CAPABILITIES) if legacy else [],
+    )
     if not isinstance(raw_capabilities, list):
         raise ProtocolError("capabilities must be an array")
     clean_capabilities = {

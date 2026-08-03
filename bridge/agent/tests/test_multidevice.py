@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from cardbridge._generated_version import AGENT_CAPABILITIES, FIRMWARE_CAPABILITIES
+from cardbridge.devices import MAX_ACK_CURSORS
 from cardbridge.protocol import encode_message, pack_audio
 from cardbridge.server import BridgeApp
 
@@ -226,6 +227,80 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
         await writer_a.wait_closed()
         await writer_b.wait_closed()
 
+    async def test_modifier_key_up_never_reasserts_its_own_flag(self) -> None:
+        _reader, writer, token = await self.connect("modifier-keys", pair_code="111111")
+
+        async def send_key(key: str, action: str, modifiers: list[str]) -> None:
+            writer.write(
+                encode_message(
+                    {"t": "key", "k": key, "a": action, "m": modifiers, "token": token}
+                )
+            )
+            await writer.drain()
+            await asyncio.sleep(0.02)
+
+        for modifier in ("ctrl", "cmd", "alt", "shift"):
+            await send_key(modifier, "down", [modifier])
+            await send_key(modifier, "up", [])
+        await send_key("ctrl", "down", ["ctrl", "shift"])
+        await send_key("ctrl", "up", ["shift"])
+
+        self.assertEqual(
+            [(item["k"], item["a"], item["m"]) for item in self.app.keyboard.events],
+            [
+                ("ctrl", "down", ["ctrl"]),
+                ("ctrl", "up", []),
+                ("cmd", "down", ["cmd"]),
+                ("cmd", "up", []),
+                ("alt", "down", ["alt"]),
+                ("alt", "up", []),
+                ("shift", "down", ["shift"]),
+                ("shift", "up", []),
+                ("ctrl", "down", ["ctrl", "shift"]),
+                ("ctrl", "up", ["shift"]),
+            ],
+        )
+        writer.close()
+        await writer.wait_closed()
+
+    async def test_ascii_key_names_share_one_case_insensitive_owner(self) -> None:
+        _reader_a, writer_a, token_a = await self.connect("case-a", pair_code="111111")
+        _reader_b, writer_b, token_b = await self.connect("case-b", pair_code="222222")
+        writer_a.write(
+            encode_message(
+                {"t": "key", "k": "X", "a": "down", "m": ["SHIFT"], "token": token_a}
+            )
+        )
+        writer_b.write(
+            encode_message(
+                {"t": "key", "k": "x", "a": "down", "m": [], "token": token_b}
+            )
+        )
+        await writer_a.drain()
+        await writer_b.drain()
+        await asyncio.sleep(0.03)
+        writer_a.write(
+            encode_message(
+                {"t": "key", "k": "X", "a": "up", "m": ["shift"], "token": token_a}
+            )
+        )
+        writer_b.write(
+            encode_message(
+                {"t": "key", "k": "x", "a": "up", "m": [], "token": token_b}
+            )
+        )
+        await writer_a.drain()
+        await writer_b.drain()
+        await asyncio.sleep(0.03)
+        self.assertEqual(
+            [(item["k"], item["a"], item["m"]) for item in self.app.keyboard.events],
+            [("x", "down", ["shift"]), ("x", "up", ["shift"])],
+        )
+        writer_a.close()
+        writer_b.close()
+        await writer_a.wait_closed()
+        await writer_b.wait_closed()
+
     async def test_same_id_replacement_clears_subscription_and_audio_lease(self) -> None:
         reader_a, writer_a, token = await self.connect("replace-all", pair_code="111111")
         writer_a.write(
@@ -365,7 +440,11 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_same_id_replacement_releases_old_keys_without_duplicate_online_device(self) -> None:
         reader_a, writer_a, token = await self.connect("replace-me", pair_code="111111")
-        writer_a.write(encode_message({"t": "key", "k": "z", "a": "down", "m": [], "token": token}))
+        writer_a.write(
+            encode_message(
+                {"t": "key", "k": "ctrl", "a": "down", "m": ["ctrl"], "token": token}
+            )
+        )
         await writer_a.drain()
         await asyncio.sleep(0.02)
         reader_b, writer_b, _ = await self.connect("replace-me", token=token)
@@ -373,11 +452,44 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
         writer_a.close()
         await writer_a.wait_closed()
         self.assertEqual(len(self.app.status_snapshot()["devices"]), 1)
-        writer_b.write(encode_message({"t": "key", "k": "z", "a": "up", "m": [], "token": token}))
+        writer_b.write(
+            encode_message(
+                {"t": "key", "k": "ctrl", "a": "up", "m": [], "token": token}
+            )
+        )
         await writer_b.drain()
         await asyncio.sleep(0.03)
-        self.assertEqual([(item["a"]) for item in self.app.keyboard.events], ["down", "up"])
+        self.assertEqual(
+            [(item["a"], item["m"]) for item in self.app.keyboard.events],
+            [("down", ["ctrl"]), ("up", [])],
+        )
         writer_b.close()
+        await writer_b.wait_closed()
+
+    async def test_replaced_session_cannot_process_buffered_authenticated_input(self) -> None:
+        _reader_a, writer_a, token = await self.connect("stale-input", pair_code="111111")
+        old = self.app.registry.get("stale-input")
+        assert old is not None
+        _reader_b, writer_b, _ = await self.connect("stale-input", token=token)
+        self.assertTrue(old.replaced)
+
+        stale_reader = asyncio.StreamReader()
+        stale_reader.feed_data(
+            encode_message(
+                {"t": "key", "k": "x", "a": "down", "m": [], "token": token}
+            )
+        )
+        stale_reader.feed_eof()
+        before = len(self.app.keyboard.events)
+        await self.app._authenticated_loop(stale_reader, writer_a, token, old)
+        stale_events = list(self.app.keyboard.events[before:])
+        self.app._release_session_keys(old)
+        self.assertEqual(stale_events, [])
+        self.assertEqual(old.held_keys, {})
+
+        writer_a.close()
+        writer_b.close()
+        await writer_a.wait_closed()
         await writer_b.wait_closed()
 
     async def test_capability_gate_rejects_unadvertised_topic(self) -> None:
@@ -421,6 +533,89 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
         writer.write(encode_message({"t": "ping", "token": token}))
         await writer.drain()
         self.assertEqual((await self.read(reader))["t"], "pong")
+        writer.close()
+        await writer.wait_closed()
+
+    async def test_subscribe_is_additive_and_resubscribe_starts_fresh(self) -> None:
+        reader, writer, token = await self.connect("subscription-set", pair_code="111111")
+        if self.app.status_task is not None:
+            self.app.status_task.cancel()
+            try:
+                await self.app.status_task
+            except asyncio.CancelledError:
+                pass
+            self.app.status_task = None
+        session = self.app.registry.get("subscription-set")
+        assert session is not None
+
+        async def request(message: dict[str, object], expected: str) -> dict[str, object]:
+            writer.write(encode_message({**message, "token": token}))
+            await writer.drain()
+            return await self.read_until(
+                reader,
+                lambda item: item.get("t") == expected and item.get("id") == message["id"],
+            )
+
+        first = await request(
+            {"t": "sync_subscribe", "id": 1, "topics": ["bridge.status"]},
+            "sync_subscribed",
+        )
+        self.assertEqual(first["topics"], ["bridge.status"])
+        second = await request(
+            {"t": "sync_subscribe", "id": 2, "topics": ["network.status"]},
+            "sync_subscribed",
+        )
+        self.assertEqual(second["topics"], ["bridge.status", "network.status"])
+
+        unsupported = await request(
+            {
+                "t": "sync_subscribe",
+                "id": 3,
+                "topics": ["future.topic"],
+                "min_interval_ms": 60_000,
+            },
+            "error",
+        )
+        self.assertEqual(unsupported["code"], "unsupported_topic")
+        self.assertEqual(session.subscriptions, {"bridge.status", "network.status"})
+        self.assertEqual(session.min_interval_ms, 1000)
+
+        session.subscription_last_sent_ms["bridge.status"] = int(time.time() * 1000)
+        remaining = await request(
+            {"t": "sync_unsubscribe", "id": 4, "topics": ["bridge.status"]},
+            "sync_unsubscribed",
+        )
+        self.assertEqual(remaining["topics"], ["network.status"])
+        self.assertNotIn("bridge.status", session.subscription_last_sent_ms)
+
+        resubscribed = await request(
+            {"t": "sync_subscribe", "id": 5, "topics": ["bridge.status"]},
+            "sync_subscribed",
+        )
+        self.assertEqual(
+            resubscribed["topics"],
+            ["bridge.status", "network.status"],
+        )
+        self.assertIn("bridge.status", session.pending_topics)
+        writer.close()
+        await writer.wait_closed()
+
+    async def test_ack_cursor_history_is_bounded_per_device(self) -> None:
+        _reader, writer, _token = await self.connect("bounded-acks", pair_code="111111")
+        session = self.app.registry.get("bounded-acks")
+        assert session is not None
+        for index in range(MAX_ACK_CURSORS + 10):
+            session.acknowledge(f"session-{index}", index)
+        self.assertEqual(len(session.ack_cursors), MAX_ACK_CURSORS)
+        self.assertNotIn("session-0", session.ack_cursors)
+        self.assertIn(f"session-{MAX_ACK_CURSORS + 9}", session.ack_cursors)
+
+        refreshed = "session-10"
+        session.acknowledge(refreshed, 999)
+        session.acknowledge("one-more", 1000)
+        self.assertIn(refreshed, session.ack_cursors)
+        self.assertEqual(session.ack_cursors[refreshed], 999)
+        self.assertEqual(len(session.ack_cursors), MAX_ACK_CURSORS)
         writer.close()
         await writer.wait_closed()
 

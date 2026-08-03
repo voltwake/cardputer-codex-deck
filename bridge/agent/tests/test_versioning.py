@@ -40,6 +40,18 @@ class DeviceVersioningTests(unittest.TestCase):
         self.assertEqual(result.model, "cardputer-adv")
         self.assertEqual(result.firmware_build, "1")
 
+    def test_explicit_legacy_protocol_without_capability_array_gets_defaults(self) -> None:
+        result = negotiate_device(
+            {
+                "protocol": {"major": 1, "minor": 0},
+                "device": {"firmware": "0.1.0"},
+            }
+        )
+        self.assertTrue(result.legacy)
+        self.assertIn("control.keys.v1", result.capabilities)
+        self.assertIn("audio.pcm16-16k.v1", result.capabilities)
+        self.assertNotIn("agents.phase.v1", result.capabilities)
+
     def test_unknown_protocol_major_returns_structured_upgrade(self) -> None:
         with self.assertRaises(CompatibilityError) as caught:
             negotiate_device(

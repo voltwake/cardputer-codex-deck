@@ -11,7 +11,9 @@ from unittest.mock import AsyncMock, patch
 from pathlib import Path
 
 from cardbridge.protocol import encode_message, pack_audio
+from cardbridge.devices import DeviceSession
 from cardbridge.server import BridgeApp, _mdns_instance_label
+from cardbridge.versioning import negotiate_device
 from fake_device import FakeDevice
 
 
@@ -382,6 +384,68 @@ class MdnsLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(failing.close_called)
         self.assertIsNone(app.zeroconf)
         self.assertIsNone(app.service_info)
+
+    async def test_stalled_device_writer_does_not_block_later_broadcasts(self) -> None:
+        class TestWriter:
+            def __init__(self, *, hangs: bool) -> None:
+                self.hangs = hangs
+                self.closed = False
+                self.payloads: list[bytes] = []
+
+            def write(self, payload: bytes) -> None:
+                self.payloads.append(payload)
+
+            async def drain(self) -> None:
+                if self.hangs:
+                    await asyncio.Event().wait()
+
+            def is_closing(self) -> bool:
+                return self.closed
+
+            def close(self) -> None:
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as directory:
+            app = BridgeApp(
+                config_path=Path(directory) / "config.json",
+                no_audio=True,
+                dry_run=True,
+                advertise=False,
+                enable_agents=False,
+            )
+            compatibility = negotiate_device(
+                {
+                    "protocol": {"major": 2, "minor": 1},
+                    "capabilities": ["agents.snapshot.v1"],
+                }
+            )
+            stalled = TestWriter(hangs=True)
+            healthy = TestWriter(hangs=False)
+            app.registry.register(
+                DeviceSession(
+                    "stalled",
+                    "127.0.0.1",
+                    token="aa" * 32,
+                    compatibility=compatibility,
+                    writer=stalled,
+                )
+            )
+            app.registry.register(
+                DeviceSession(
+                    "healthy",
+                    "127.0.0.1",
+                    token="bb" * 32,
+                    compatibility=compatibility,
+                    writer=healthy,
+                )
+            )
+
+            with patch("cardbridge.server.DEVICE_SEND_TIMEOUT_SECONDS", 0.01):
+                await asyncio.wait_for(app._broadcast_agent_status(), 0.2)
+
+            self.assertTrue(stalled.closed)
+            self.assertTrue(healthy.payloads)
+            self.assertIn(b'"t":"agent_status"', healthy.payloads[0])
 
 
 class StartupDegradationTests(unittest.IsolatedAsyncioTestCase):

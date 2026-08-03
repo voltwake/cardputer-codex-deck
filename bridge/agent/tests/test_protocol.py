@@ -79,6 +79,38 @@ class ConfigTests(unittest.TestCase):
             self.assertNotIn("version", reloaded.data)
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
+    def test_authenticated_reconnect_refreshes_non_secret_device_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            config = BridgeConfig(path)
+            token = config.pair(
+                "device-1",
+                "Old name",
+                vendor="old-vendor",
+                model="old-model",
+                firmware="0.1.0",
+                firmware_build="1",
+            )
+            self.assertTrue(
+                config.update_device_metadata(
+                    "device-1",
+                    name="New name",
+                    vendor="new-vendor",
+                    model="new-model",
+                    firmware="0.3.0",
+                    firmware_build="8",
+                )
+            )
+            # Missing fields in a later legacy hello preserve richer metadata.
+            self.assertFalse(config.update_device_metadata("device-1"))
+            self.assertEqual(config.token_for("device-1"), token)
+            paired = config.paired_devices()[0]
+            self.assertEqual(paired["name"], "New name")
+            self.assertEqual(paired["vendor"], "new-vendor")
+            self.assertEqual(paired["model"], "new-model")
+            self.assertEqual(paired["firmware"], "0.3.0")
+            self.assertEqual(paired["firmware_build"], "8")
+
     def test_plaintext_pairing_token_is_migrated_to_external_store(self) -> None:
         class MemoryTokenStore:
             def __init__(self) -> None:

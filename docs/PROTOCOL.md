@@ -92,11 +92,13 @@ An unknown topic returns a bounded structured `error` with
 `code: "unsupported_topic"` and leaves the connection usable; a known topic
 whose capability was not negotiated returns `capability_required`.
 
-Subscriptions use `sync_subscribe`. The Agent clamps `min_interval_ms` to
-250–60000 ms; Token stream downlink is therefore limited to 4 Hz even when the
-upstream App Server reports more events. Updates use `sync_update`, and
-`sync_unsubscribe` returns the remaining topic set. The request `id`, when
-present, is echoed by confirmations and errors.
+Subscriptions use `sync_subscribe`. Each accepted request adds to the session's
+existing topic set; unsupported or unnegotiated topics do not erase earlier
+subscriptions. The Agent clamps `min_interval_ms` to 250–60000 ms; Token stream
+downlink is therefore limited to 4 Hz even when the upstream App Server reports
+more events. Updates use `sync_update`, and `sync_unsubscribe` returns the
+remaining topic set. Re-subscribing after removal starts with a fresh delivery
+window. The request `id`, when present, is echoed by confirmations and errors.
 
 `bridge.status` contains Agent state/version/build, negotiated protocol,
 uptime, Accessibility/audio readiness, active microphone device ID, and public
@@ -109,7 +111,12 @@ an SSID. `codex.sessions` contains at most eight privacy-trimmed sessions.
 Only a session with `control.keys.v1` can inject keys. Held keys are tracked per
 connection. A key-down is injected once when the first device holds it, and the
 final key-up is injected only after the last holder releases it. Disconnect,
-unpair, and same-ID replacement release only that session's keys.
+unpair, and same-ID replacement release only that session's keys. A modifier's
+own key-up never carries its own modifier flag (for example, `ctrl` up omits
+`ctrl`) while other still-active modifier flags are preserved. ASCII key names
+are normalized to lowercase before shared ownership, so vendor casing cannot
+create duplicate physical events. ASCII modifier names are normalized and
+deduplicated the same way.
 
 ## Device UDP audio: port 7789
 

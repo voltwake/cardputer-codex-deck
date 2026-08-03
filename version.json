@@ -2,11 +2,11 @@
   "release": "1.1.0",
   "mac_app": {
     "version": "1.1.0",
-    "build": 9
+    "build": 12
   },
   "bridge_agent": {
     "version": "1.1.0",
-    "build": 9
+    "build": 12
   },
   "agent_api": {
     "major": 1,
@@ -14,7 +14,7 @@
   },
   "firmware": {
     "version": "0.3.0",
-    "build": 8
+    "build": 9
   },
   "device_protocol": {
     "major": 2,
