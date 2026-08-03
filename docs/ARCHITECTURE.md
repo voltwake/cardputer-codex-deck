@@ -42,10 +42,11 @@ for it. Pairing secrets are kept outside ordinary status snapshots and logs.
 may have only one active session: a newly authenticated session atomically
 replaces the previous one, releases its keys and audio lease, and clears its
 subscriptions. Buffered messages from the superseded TCP task are discarded,
-and each device write has a bounded drain timeout so a stalled client cannot
-indefinitely block later devices. Pairing challenges are keyed by connection,
-so simultaneous six-digit codes and failure counters cannot overwrite one
-another.
+and each connection serializes direct responses with background status/topic
+updates. Device writes and close waits are bounded so a stalled client cannot
+indefinitely block later devices or Agent shutdown. Pairing challenges are
+keyed by connection, so simultaneous six-digit codes and failure counters
+cannot overwrite one another.
 
 Keyboard state is global only at the final injection boundary. Each session
 tracks its own held keys; a physical key-down is injected once and the final

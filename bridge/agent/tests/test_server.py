@@ -447,6 +447,77 @@ class MdnsLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(healthy.payloads)
             self.assertIn(b'"t":"agent_status"', healthy.payloads[0])
 
+    async def test_concurrent_device_sends_are_serialized_per_writer(self) -> None:
+        class ConcurrentWriter:
+            def __init__(self) -> None:
+                self.active_drains = 0
+                self.max_active_drains = 0
+                self.closed = False
+                self.payloads: list[bytes] = []
+
+            def write(self, payload: bytes) -> None:
+                self.payloads.append(payload)
+
+            async def drain(self) -> None:
+                self.active_drains += 1
+                self.max_active_drains = max(
+                    self.max_active_drains, self.active_drains
+                )
+                try:
+                    await asyncio.sleep(0.01)
+                finally:
+                    self.active_drains -= 1
+
+            def is_closing(self) -> bool:
+                return self.closed
+
+        with tempfile.TemporaryDirectory() as directory:
+            app = BridgeApp(
+                config_path=Path(directory) / "config.json",
+                no_audio=True,
+                dry_run=True,
+                advertise=False,
+                enable_agents=False,
+            )
+            writer = ConcurrentWriter()
+            await asyncio.gather(
+                app._send(writer, {"t": "first"}),
+                app._send(writer, {"t": "second"}),
+            )
+
+        self.assertEqual(writer.max_active_drains, 1)
+        self.assertEqual(len(writer.payloads), 2)
+
+    async def test_device_writer_close_is_bounded(self) -> None:
+        class HangingCloseWriter:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def is_closing(self) -> bool:
+                return self.closed
+
+            def close(self) -> None:
+                self.closed = True
+
+            async def wait_closed(self) -> None:
+                await asyncio.Event().wait()
+
+        with tempfile.TemporaryDirectory() as directory:
+            app = BridgeApp(
+                config_path=Path(directory) / "config.json",
+                no_audio=True,
+                dry_run=True,
+                advertise=False,
+                enable_agents=False,
+            )
+            writer = HangingCloseWriter()
+            app._writer_send_locks[writer] = asyncio.Lock()
+            with patch("cardbridge.server.DEVICE_SEND_TIMEOUT_SECONDS", 0.01):
+                await asyncio.wait_for(app._close_writer_and_wait(writer), 0.2)
+
+        self.assertTrue(writer.closed)
+        self.assertNotIn(writer, app._writer_send_locks)
+
 
 class StartupDegradationTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_blackhole_does_not_stop_keyboard_or_network_bridge(self) -> None:

@@ -39,6 +39,15 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
     async def read(self, reader: asyncio.StreamReader) -> dict[str, object]:
         return json.loads(await asyncio.wait_for(reader.readline(), 2))
 
+    async def close_writers(self, *writers: asyncio.StreamWriter) -> None:
+        for writer in writers:
+            writer.close()
+        for writer in writers:
+            try:
+                await asyncio.wait_for(writer.wait_closed(), 1)
+            except (asyncio.TimeoutError, ConnectionError, OSError):
+                pass
+
     async def read_until(
         self, reader: asyncio.StreamReader, predicate: object
     ) -> dict[str, object]:
@@ -175,12 +184,10 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
             for item in self.app.status_snapshot()["devices"]
         }
         self.assertEqual(lease_snapshot, {"waveshare-a": "busy", "waveshare-b": "owner"})
-        writer_a.close()
-        await writer_a.wait_closed()
+        await self.close_writers(writer_a)
         await asyncio.sleep(0.03)
         self.assertIsNotNone(self.app.registry.get("waveshare-b"))
-        writer_b.close()
-        await writer_b.wait_closed()
+        await self.close_writers(writer_b)
 
     async def test_different_keys_and_last_same_key_holder_have_stable_injection(self) -> None:
         reader_a, writer_a, token_a = await self.connect("keys-a", pair_code="111111")
@@ -222,10 +229,7 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
                 ("x", "up", ["cmd"]),
             ],
         )
-        writer_a.close()
-        writer_b.close()
-        await writer_a.wait_closed()
-        await writer_b.wait_closed()
+        await self.close_writers(writer_a, writer_b)
 
     async def test_modifier_key_up_never_reasserts_its_own_flag(self) -> None:
         _reader, writer, token = await self.connect("modifier-keys", pair_code="111111")
@@ -260,8 +264,7 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
                 ("ctrl", "up", ["shift"]),
             ],
         )
-        writer.close()
-        await writer.wait_closed()
+        await self.close_writers(writer)
 
     async def test_ascii_key_names_share_one_case_insensitive_owner(self) -> None:
         _reader_a, writer_a, token_a = await self.connect("case-a", pair_code="111111")
@@ -296,10 +299,7 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
             [(item["k"], item["a"], item["m"]) for item in self.app.keyboard.events],
             [("x", "down", ["shift"]), ("x", "up", ["shift"])],
         )
-        writer_a.close()
-        writer_b.close()
-        await writer_a.wait_closed()
-        await writer_b.wait_closed()
+        await self.close_writers(writer_a, writer_b)
 
     async def test_same_id_replacement_clears_subscription_and_audio_lease(self) -> None:
         reader_a, writer_a, token = await self.connect("replace-all", pair_code="111111")
@@ -330,16 +330,14 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
                 break
         else:
             self.fail("replaced device connection did not close")
-        writer_a.close()
-        await writer_a.wait_closed()
+        await self.close_writers(writer_a)
         self.assertEqual(len(self.app.status_snapshot()["devices"]), 1)
         self.assertEqual(old.held_keys, {})
         self.assertEqual(old.subscriptions, set())
         self.assertEqual(old.audio_lease_state, "none")
         self.assertIsNone(self.app.audio_lease_owner_id)
 
-        writer_b.close()
-        await writer_b.wait_closed()
+        await self.close_writers(writer_b)
 
     async def test_audio_lease_expires_after_owner_silence(self) -> None:
         _reader, writer, token = await self.connect("silent-owner", pair_code="111111")
@@ -355,8 +353,7 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
         self.app._expire_audio_lease()
         self.assertIsNone(self.app.audio_lease_owner_id)
         self.assertEqual(owner.audio_lease_state, "none")
-        writer.close()
-        await writer.wait_closed()
+        await self.close_writers(writer)
 
     async def test_current_m5_profile_keeps_legacy_wire_behavior_and_auto_claims_audio(self) -> None:
         reader, writer, token = await self.connect(
@@ -399,8 +396,7 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(reader.readline(), 0.05)
         with self.assertRaises(asyncio.TimeoutError):
             await asyncio.wait_for(reader.readline(), 0.05)
-        writer.close()
-        await writer.wait_closed()
+        await self.close_writers(writer)
 
     async def test_concurrent_pairing_requests_and_failures_are_isolated(self) -> None:
         reader_a, writer_a = await asyncio.open_connection("127.0.0.1", self.app.tcp_port)
@@ -433,10 +429,7 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
         writer_a.write(encode_message({"t": "pair", "code": "111111"}))
         await writer_a.drain()
         self.assertEqual((await self.read(reader_a))["t"], "paired")
-        writer_a.close()
-        writer_b.close()
-        await writer_a.wait_closed()
-        await writer_b.wait_closed()
+        await self.close_writers(writer_a, writer_b)
 
     async def test_same_id_replacement_releases_old_keys_without_duplicate_online_device(self) -> None:
         reader_a, writer_a, token = await self.connect("replace-me", pair_code="111111")
@@ -449,8 +442,7 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.02)
         reader_b, writer_b, _ = await self.connect("replace-me", token=token)
         self.assertEqual(await asyncio.wait_for(reader_a.readline(), 2), b"")
-        writer_a.close()
-        await writer_a.wait_closed()
+        await self.close_writers(writer_a)
         self.assertEqual(len(self.app.status_snapshot()["devices"]), 1)
         writer_b.write(
             encode_message(
@@ -463,8 +455,7 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
             [(item["a"], item["m"]) for item in self.app.keyboard.events],
             [("down", ["ctrl"]), ("up", [])],
         )
-        writer_b.close()
-        await writer_b.wait_closed()
+        await self.close_writers(writer_b)
 
     async def test_replaced_session_cannot_process_buffered_authenticated_input(self) -> None:
         _reader_a, writer_a, token = await self.connect("stale-input", pair_code="111111")
@@ -487,10 +478,7 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stale_events, [])
         self.assertEqual(old.held_keys, {})
 
-        writer_a.close()
-        writer_b.close()
-        await writer_a.wait_closed()
-        await writer_b.wait_closed()
+        await self.close_writers(writer_a, writer_b)
 
     async def test_capability_gate_rejects_unadvertised_topic(self) -> None:
         reader, writer, token = await self.connect(
@@ -533,8 +521,7 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
         writer.write(encode_message({"t": "ping", "token": token}))
         await writer.drain()
         self.assertEqual((await self.read(reader))["t"], "pong")
-        writer.close()
-        await writer.wait_closed()
+        await self.close_writers(writer)
 
     async def test_subscribe_is_additive_and_resubscribe_starts_fresh(self) -> None:
         reader, writer, token = await self.connect("subscription-set", pair_code="111111")
@@ -597,8 +584,7 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
             ["bridge.status", "network.status"],
         )
         self.assertIn("bridge.status", session.pending_topics)
-        writer.close()
-        await writer.wait_closed()
+        await self.close_writers(writer)
 
     async def test_ack_cursor_history_is_bounded_per_device(self) -> None:
         _reader, writer, _token = await self.connect("bounded-acks", pair_code="111111")
@@ -616,8 +602,7 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(refreshed, session.ack_cursors)
         self.assertEqual(session.ack_cursors[refreshed], 999)
         self.assertEqual(len(session.ack_cursors), MAX_ACK_CURSORS)
-        writer.close()
-        await writer.wait_closed()
+        await self.close_writers(writer)
 
     async def test_ack_cursor_is_per_device_and_subscription_is_clamped(self) -> None:
         reader_a, writer_a, token_a = await self.connect("ack-a", pair_code="111111")
@@ -681,10 +666,7 @@ class MultiDeviceServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sessions["data"]["items"][0]["status"], "ready")
         self.assertEqual(sessions["data"]["items"][0]["activity"], status_b["items"][0]["activity"])
 
-        writer_a.close()
-        writer_b.close()
-        await writer_a.wait_closed()
-        await writer_b.wait_closed()
+        await self.close_writers(writer_a, writer_b)
 
 
 if __name__ == "__main__":

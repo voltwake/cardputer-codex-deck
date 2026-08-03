@@ -1,9 +1,10 @@
 # CardBridge 1.1.0
 
-- Build 12 fixes standalone Ctrl/Cmd/Option/Shift release flags after the
+- Build 13 fixes standalone Ctrl/Cmd/Option/Shift release flags after the
   multi-device keyboard owner merge, rejects buffered input from replaced
   same-ID sessions, keeps incremental topic subscriptions, bounds slow-device
-  writes, and refreshes paired-device metadata on authenticated reconnect.
+  writes and disconnect cleanup, serializes concurrent downlinks per device,
+  and refreshes paired-device metadata on authenticated reconnect.
 - App startup now probes an existing Unix socket instead of trusting the path
   alone, and automatically replaces a still-shutting-down incompatible Agent
   during an in-place client update.

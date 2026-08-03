@@ -141,6 +141,7 @@ class BridgeApp:
         self.audio_lease_idle_ms = 3_000
         self._held_key_owners: dict[str, dict[int, list[str]]] = {}
         self._injected_key_modifiers: dict[str, list[str]] = {}
+        self._writer_send_locks: dict[Any, asyncio.Lock] = {}
         self.agents = AgentStore()
         self.usage = TokenUsageStore()
         self.codex_monitor = CodexMonitor(self.agents, usage=self.usage)
@@ -719,11 +720,7 @@ class BridgeApp:
             self._sync_connected_devices()
             if session is not None or device_id is not None:
                 self._status_changed()
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except (ConnectionError, OSError):
-                pass
+            await self._close_writer_and_wait(writer)
 
     async def _authenticated_loop(
         self,
@@ -846,8 +843,19 @@ class BridgeApp:
         return decode_message(line)
 
     async def _send(self, writer: asyncio.StreamWriter, message: dict[str, Any]) -> None:
-        writer.write(encode_message(message))
-        await asyncio.wait_for(writer.drain(), DEVICE_SEND_TIMEOUT_SECONDS)
+        lock = self._writer_send_locks.setdefault(writer, asyncio.Lock())
+
+        async def send_locked() -> None:
+            async with lock:
+                if writer.is_closing():
+                    raise ConnectionError("device writer is closing")
+                writer.write(encode_message(message))
+                await writer.drain()
+
+        # Background status, topic, and lease updates can become ready at the
+        # same time as a direct response. Serialize the complete frame per TCP
+        # connection and bound both lock acquisition and socket backpressure.
+        await asyncio.wait_for(send_locked(), DEVICE_SEND_TIMEOUT_SECONDS)
 
     def _session_is_current(self, device: DeviceSession) -> bool:
         return (
@@ -859,6 +867,18 @@ class BridgeApp:
     def _close_failed_writer(writer: Any) -> None:
         if not writer.is_closing():
             writer.close()
+
+    async def _close_writer_and_wait(self, writer: Any) -> None:
+        if not writer.is_closing():
+            writer.close()
+        try:
+            await asyncio.wait_for(
+                writer.wait_closed(), DEVICE_SEND_TIMEOUT_SECONDS
+            )
+        except (asyncio.TimeoutError, ConnectionError, OSError):
+            pass
+        finally:
+            self._writer_send_locks.pop(writer, None)
 
     def _new_jitter_buffer(self) -> JitterBuffer:
         return JitterBuffer(self.jitter_ms)

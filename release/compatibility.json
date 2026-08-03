@@ -4,7 +4,7 @@
     "minor": 1
   },
   "bridge_agent": {
-    "build": 12,
+    "build": 13,
     "version": "1.1.0"
   },
   "capability_profiles": {
@@ -42,7 +42,7 @@
     "architectures": [
       "arm64"
     ],
-    "build": 12,
+    "build": 13,
     "minimum_macos": "13.0",
     "version": "1.1.0"
   },

@@ -80,19 +80,24 @@ format, and capability-gated `sync_*` topics in `PROTOCOL.md`.
   after authenticated firmware reconnects.
 - An in-place App update exposed a separate client lifecycle race: build 10
   could see the old Agent inside its bounded shutdown window, reject the stale
-  build, and then remain behind a dead Unix socket. App/Agent build 12 probes
+  build, and then remain behind a dead Unix socket. App/Agent build 13 probes
   socket reachability, requests shutdown from an incompatible old Agent, and
   retries the exact bundled build. The original failure was reproduced during
   installation. The build 11 → 12 update then exposed a health-check false
   positive while the old Agent was still stopping; health checks now wait for
   the exact expected build in a settled state. The corrected install recovered
   automatically and `./scripts/healthcheck.sh --json` reported zero errors and
-  zero warnings against App/Agent build 12.
-- `./scripts/test.sh` passed 96 Python tests and 5 Swift tests. The firmware
+  zero warnings against App/Agent build 13.
+- A remote CI run exposed one final transport race that local tests did not:
+  background status and topic sends could overlap a direct response on one
+  device writer, and a broken connection could then wait forever during close.
+  Downlinks are now serialized per connection and both drain and close waits
+  are bounded.
+- `./scripts/test.sh` passed 98 Python tests and 5 Swift tests. The firmware
   build passed at 65,220 bytes RAM (19.9%) and 2,346,170 bytes Flash (70.2%),
   generated-file checks passed, and the complete signed App/Agent/driver build
   validated successfully.
-- The installed App and Agent both report `1.1.0` build `12`. The existing M5
+- The installed App and Agent both report `1.1.0` build `13`. The existing M5
   automatically reconnected as firmware `0.3.0` build `8`, protocol `2.0`,
   with all five implemented capabilities, Accessibility enabled, audio output
   running, no Agent issues, and zero invalid audio packets.
