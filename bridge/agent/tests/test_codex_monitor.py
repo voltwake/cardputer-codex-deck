@@ -91,6 +91,72 @@ class CodexMonitorHelpersTests(unittest.TestCase):
 
 
 class CodexMonitorFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_thread_refresh_tracks_session_files_for_usage(self) -> None:
+        class ThreadClient:
+            async def request(self, method: str, params: object) -> dict:
+                if method == "thread/list":
+                    return {
+                        "data": [
+                            {
+                                "id": "desktop-session",
+                                "name": "Desktop session",
+                                "path": "/tmp/session.jsonl",
+                                "updatedAt": 123,
+                            }
+                        ]
+                    }
+                raise AssertionError(method)
+
+        class RecordingSessionUsage:
+            def __init__(self) -> None:
+                self.records: list[dict] = []
+
+            async def start(self) -> None:
+                return None
+
+            async def stop(self) -> None:
+                return None
+
+            def track_threads(self, records: list[dict]) -> None:
+                self.records = records
+
+        session_usage = RecordingSessionUsage()
+        monitor = CodexMonitor(
+            AgentStore(), executable="/fake/codex", session_usage=session_usage
+        )
+        monitor.client = ThreadClient()  # type: ignore[assignment]
+
+        await monitor.refresh_threads()
+
+        self.assertEqual(session_usage.records[0]["id"], "desktop-session")
+        self.assertEqual(session_usage.records[0]["path"], "/tmp/session.jsonl")
+
+    async def test_session_usage_starts_without_an_app_server_binary(self) -> None:
+        class RecordingSessionUsage:
+            def __init__(self) -> None:
+                self.started = False
+                self.stopped = False
+
+            async def start(self) -> None:
+                self.started = True
+
+            async def stop(self) -> None:
+                self.stopped = True
+
+            def track_threads(self, records: list[dict]) -> None:
+                return None
+
+        session_usage = RecordingSessionUsage()
+        with patch(
+            "cardbridge.codex_monitor.find_codex_candidates", return_value=[]
+        ):
+            monitor = CodexMonitor(AgentStore(), session_usage=session_usage)
+        await monitor.start()
+        await monitor.stop()
+
+        self.assertTrue(session_usage.started)
+        self.assertTrue(session_usage.stopped)
+
     async def test_token_usage_notification_updates_the_public_store(self) -> None:
         store = AgentStore()
         usage = TokenUsageStore()
@@ -205,6 +271,16 @@ class CodexMonitorFallbackTests(unittest.IsolatedAsyncioTestCase):
     async def test_monitor_falls_back_without_losing_api_mode_sessions(self) -> None:
         attempts: list[str] = []
 
+        class FakeSessionUsage:
+            async def start(self) -> None:
+                return None
+
+            async def stop(self) -> None:
+                return None
+
+            def track_threads(self, records: list[dict]) -> None:
+                return None
+
         class FakeClient:
             def __init__(self, executable: str, notification_handler=None) -> None:
                 self.executable = executable
@@ -241,7 +317,7 @@ class CodexMonitorFallbackTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch("cardbridge.codex_monitor.CodexAppServerClient", FakeClient),
         ):
-            monitor = CodexMonitor(store)
+            monitor = CodexMonitor(store, session_usage=FakeSessionUsage())
             await monitor.start()
             for _ in range(100):
                 if "api-session" in store.sessions:

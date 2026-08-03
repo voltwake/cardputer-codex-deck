@@ -32,6 +32,10 @@ transcripts, or audio recordings in a report.
 - Never log or export pairing tokens.
 - Never forward Codex prompts, transcripts, reasoning, raw commands, tool
   arguments, command output, or `auth.json`.
+- When collecting local Codex Token usage, JSON-decode only `token_count`
+  records. Extract session/turn IDs from bounded metadata prefixes and never
+  decode response items, summaries, prompts, reasoning, tool arguments, or
+  command output.
 - Keep the local control socket owner-only and validate the connecting UID.
 - Reject unauthenticated post-handshake device messages.
 - Keep release artifacts signed, notarized where applicable, and accompanied

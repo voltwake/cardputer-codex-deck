@@ -12,6 +12,7 @@ from typing import Any
 from ._generated_version import AGENT_VERSION
 
 from .agents import AGENT_LIMIT, AgentStore
+from .session_usage import CodexSessionUsageMonitor
 from .usage import TokenUsageStore
 
 LOG = logging.getLogger("cardbridge.codex")
@@ -225,9 +226,11 @@ class CodexMonitor:
         store: AgentStore,
         executable: str | None = None,
         usage: TokenUsageStore | None = None,
+        session_usage: CodexSessionUsageMonitor | None = None,
     ) -> None:
         self.store = store
         self.usage = usage or TokenUsageStore()
+        self.session_usage = session_usage or CodexSessionUsageMonitor(self.usage)
         self.executables = [executable] if executable else find_codex_candidates()
         self.executable = self.executables[0] if self.executables else None
         self.client: CodexAppServerClient | None = None
@@ -237,9 +240,9 @@ class CodexMonitor:
         self._message_published_at: dict[tuple[str, str], float] = {}
 
     async def start(self) -> None:
+        await self.session_usage.start()
         if not self.executables:
             LOG.warning("Codex executable not found; agent monitor disabled")
-            self.usage.set_unavailable("app_server_unavailable")
             return
         self._stopping = False
         self.task = asyncio.create_task(self._run())
@@ -256,6 +259,7 @@ class CodexMonitor:
         if self.client is not None:
             await self.client.stop()
             self.client = None
+        await self.session_usage.stop()
 
     async def refresh(self) -> None:
         await self.refresh_threads()
@@ -275,7 +279,9 @@ class CodexMonitor:
         )
         data = threads.get("data")
         if isinstance(data, list):
-            self.store.update_threads([item for item in data if isinstance(item, dict)])
+            records = [item for item in data if isinstance(item, dict)]
+            self.store.update_threads(records)
+            self.session_usage.track_threads(records)
 
     async def refresh_account(self) -> None:
         if self.client is None:
@@ -293,8 +299,6 @@ class CodexMonitor:
 
         quota_mode = quota_mode_from_account(account)
         self.store.set_quota_mode(quota_mode)
-        if quota_mode == "api" and not self.usage.available:
-            self.usage.set_unavailable("provider_unsupported")
         if quota_mode != "subscription":
             return
 

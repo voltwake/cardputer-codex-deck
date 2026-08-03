@@ -16,7 +16,7 @@ Codex Deck (`CardBridge.app`, SwiftUI menu bar process)
        ├─ capability-gated sync topics → each subscribed device
        ├─ global key ownership → Quartz keyboard injection
        ├─ one AudioLease → selected session jitter buffer → Microphone Feed
-       ├─ TokenUsageStore ← Codex App Server notifications
+       ├─ TokenUsageStore ← incremental Codex session counters
        └─ local owner-only Unix control socket → multi-device App UI
 ```
 
@@ -67,10 +67,19 @@ updates are merged and rate-limited per session. Subscription requests are
 additive until explicit unsubscribe. Legacy v1 and current M5 capability
 profiles do not receive new sync, Token, or lease messages.
 
-Token usage is sourced only from `thread/tokenUsage/updated`. The store keeps
-per-thread cumulative/last/delta/rate values, rejects stale out-of-order
-notifications, and establishes a zero-delta baseline after a reset or new
-turn. Device usage topics send the newest four records to leave room under the
+Token usage is sourced primarily from `token_count` records appended to
+`~/.codex/sessions/**/*.jsonl`, so turns owned by Codex Desktop or another App
+Server process remain visible and Agent restarts reconstruct recent totals. The
+reader tails changed files by byte offset, uses App Server thread paths plus a
+bounded recent-file discovery fallback, and JSON-decodes only Token records.
+Session and turn IDs are extracted from bounded metadata prefixes; message,
+summary, reasoning, tool, and command-output records are not decoded. Public
+`thread/tokenUsage/updated` notifications remain a low-latency optional source.
+
+The store keeps per-thread cumulative/last/delta/rate values, rejects stale
+out-of-order updates, and establishes a zero-delta baseline after a provider
+counter reset. Session-file counters remain cumulative across turn boundaries.
+Device usage topics send the newest four records to leave room under the
 4096-byte device line limit; the owner-only App snapshot retains the store's
 bounded eight-session view.
 
@@ -81,3 +90,5 @@ bounded eight-session view.
 - UDP audio is authenticated but not retransmitted or encrypted separately.
 - The local Unix socket is owner-only and validates the connecting UID.
 - Codex integration exposes only short, privacy-trimmed public status.
+- The session Token reader never decodes response items, summaries, prompts,
+  reasoning, tool arguments, or command output.

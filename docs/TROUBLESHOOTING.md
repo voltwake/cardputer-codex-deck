@@ -88,9 +88,11 @@ Inspect the device's negotiated capability list. `sync_req` needs the topic's
 read capability; subscriptions additionally need `sync.subscribe.v1`, and
 `codex.usage` streaming needs `usage.tokens.stream.v1`. Legacy v1 and the
 shipped M5 capability profile intentionally receive no `sync_*`, Token, or
-audio-lease messages. Token status is shown as **不可用/未知** until the Codex
-App Server emits `thread/tokenUsage/updated`; API/custom providers may not
-provide it. The device usage topic is bounded to the newest four sessions to
+audio-lease messages. Token status is shown as **不可用/未知** until at least one
+valid `token_count` record exists under `~/.codex/sessions/`; the Agent tails
+those files and reconstructs recent totals after a restart. App Server
+`thread/tokenUsage/updated` remains an optional low-latency source, not a
+requirement. The device usage topic is bounded to the newest four sessions to
 stay within the 4096-byte control line.
 
 ## Same-ID reconnection

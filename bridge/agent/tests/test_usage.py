@@ -68,6 +68,23 @@ class TokenUsageStoreTests(unittest.TestCase):
         self.assertEqual(session["turn_id"], "turn-2")
         self.assertEqual(session["delta"]["total"], 0)
 
+    def test_session_file_counter_continues_across_turns(self) -> None:
+        store = TokenUsageStore()
+        store.update_notification(
+            event(100, 1_000),
+            source="codex_session_jsonl",
+            cumulative_across_turns=True,
+        )
+        store.update_notification(
+            event(150, 2_000, turn_id="turn-2"),
+            source="codex_session_jsonl",
+            cumulative_across_turns=True,
+        )
+        session = store.snapshot()["sessions"][0]
+        self.assertEqual(session["turn_id"], "turn-2")
+        self.assertEqual(session["delta"]["total"], 50)
+        self.assertEqual(store.snapshot()["source"], "codex_session_jsonl")
+
     def test_device_usage_snapshot_with_eight_long_sessions_stays_under_4k(self) -> None:
         store = TokenUsageStore()
         for index in range(8):

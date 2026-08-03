@@ -102,7 +102,7 @@ class TokenUsageSession:
 
 
 class TokenUsageStore:
-    """Privacy-safe thread token accounting sourced only from App Server events."""
+    """Privacy-safe thread token accounting from public counters only."""
 
     def __init__(self, on_change: Callable[[], None] | None = None) -> None:
         self.available = False
@@ -137,7 +137,13 @@ class TokenUsageStore:
         if changed:
             self._changed()
 
-    def update_notification(self, params: dict[str, Any]) -> bool:
+    def update_notification(
+        self,
+        params: dict[str, Any],
+        *,
+        source: str = "codex_app_server",
+        cumulative_across_turns: bool = False,
+    ) -> bool:
         thread_id = params.get("threadId")
         turn_id = params.get("turnId")
         raw_usage = params.get("tokenUsage")
@@ -154,9 +160,11 @@ class TokenUsageStore:
         ) or _now_ms()
 
         previous = self._previous.get(clean_thread_id)
+        same_counter = previous is not None and (
+            cumulative_across_turns or previous[0] == clean_turn_id
+        )
         if (
-            previous is not None
-            and previous[0] == clean_turn_id
+            same_counter
             and event_ms < previous[2]
         ):
             # App Server notifications can arrive after a newer event when
@@ -166,8 +174,7 @@ class TokenUsageStore:
             return False
 
         if (
-            previous is not None
-            and previous[0] == clean_turn_id
+            same_counter
             and total.non_decreasing_from(previous[1])
         ):
             delta = total.subtract(previous[1])
@@ -178,7 +185,11 @@ class TokenUsageStore:
             delta = TokenBreakdown()
             window_ms = 0
 
-        if previous is not None and previous[0] == clean_turn_id and total == previous[1]:
+        if (
+            previous is not None
+            and previous[0] == clean_turn_id
+            and total == previous[1]
+        ):
             # Duplicate notifications are harmless and do not create fake rate
             # spikes or unnecessary device broadcasts. Keep the original
             # timestamp so a later real delta measures the whole interval.
@@ -199,7 +210,7 @@ class TokenUsageStore:
         self.sessions[clean_thread_id] = record
         self._previous[clean_thread_id] = (clean_turn_id, total, event_ms)
         self.available = True
-        self.source = "codex_app_server"
+        self.source = source[:64] if source else "unknown"
         self.reason = ""
         self.updated_at_ms = max(self.updated_at_ms, event_ms)
         self._trim()

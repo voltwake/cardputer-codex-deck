@@ -52,8 +52,9 @@ python3 tools/validate_release.py --app bridge/macos/dist/CardBridge.app
 The dependency-free Python suite covers legacy v1, the shipped M5 v2
 capability profile, vendor-neutral devices, concurrent pairing, same-ID
 replacement, per-device keys/acknowledgements, independent UDP jitter buffers,
-the single audio lease, topic capability gates, Token deltas/rates, privacy,
-and the 4096-byte device line limit:
+the single audio lease, topic capability gates, session-file Token
+recovery/tailing, cumulative deltas/rates, privacy, and the 4096-byte device
+line limit:
 
 ```sh
 PYTHONPATH=bridge/agent:. bridge/agent/.venv/bin/python -m unittest discover -s bridge/agent/tests -v

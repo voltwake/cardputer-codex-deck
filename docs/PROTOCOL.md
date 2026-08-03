@@ -147,24 +147,29 @@ frames with silence, and never retransmits audio.
 
 ## Token usage
 
-The monitor consumes only the public App Server notification
-`thread/tokenUsage/updated` and stores no prompt, response, reasoning, tool
-arguments, command output, or auth data. It records per-thread `total`, `last`,
-`delta`, `model_context_window`, `window_ms`, and `tokens_per_second`.
+The monitor primarily tails `token_count` records from local Codex session
+JSONL files and optionally consumes the public App Server notification
+`thread/tokenUsage/updated`. It records per-thread `total`, `last`, `delta`,
+`model_context_window`, `window_ms`, and `tokens_per_second`.
+
+Only `token_count` lines are JSON-decoded. Session and turn IDs are extracted
+from bounded metadata prefixes; prompt, response, summary, reasoning, tool
+argument, command output, and auth data are never decoded or stored.
 
 `codex.usage` is explicit when data is not available:
 
 ```json
-{"available":false,"source":"unavailable","reason":"provider_unsupported","sessions":[]}
+{"available":false,"source":"unavailable","reason":"not_observed","sessions":[]}
 ```
 
 Repeated notifications are ignored, stale out-of-order notifications are
 discarded without moving the high-water mark, and a newer decreasing/reset
 value establishes a new baseline with zero delta/rate. None can create negative
-or invented usage. Process restart does not reconstruct history when the
-upstream does not provide it. Device envelopes include the newest four usage
-sessions so the full `total`/`last`/`delta` breakdown remains within 4096 bytes;
-the owner-only local snapshot retains the store's eight-session bound.
+or invented usage. Agent startup reconstructs recent totals from the local
+session files before tailing new records by byte offset. Device envelopes
+include the newest four usage sessions so the full `total`/`last`/`delta`
+breakdown remains within 4096 bytes; the owner-only local snapshot retains the
+store's eight-session bound.
 
 ## Local Agent API
 
